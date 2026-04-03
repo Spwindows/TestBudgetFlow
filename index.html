@@ -215,7 +215,6 @@
           <div class="collapseBody">
             <div class="card" style="margin:0 0 12px 0">
               <h2>Locked Money</h2>
-              <div class="summaryRow"><span>App balance</span><strong id="sumBankBalance">$0.00</strong></div>
               <div class="summaryRow"><span>Locked for current bills</span><strong id="sumLockedBills">$0.00</strong></div>
               <div class="summaryRow"><span>Sinking funds this cycle</span><strong id="sumLockedNext">$0.00</strong></div>
               <div class="summaryRow"><span>Safe to spend now</span><strong id="sumSafeSpend">$0.00</strong></div>
@@ -588,17 +587,98 @@ const SUPABASE_KEY = "sb_publishable_MUD1p1806N-BbidyrQsAig_BJLwwQ4U";
       const targetPerYear = getFundTargetAmount(fund) * billEventsPerYear; const contribution = targetPerYear / payCyclesPerYear;
       return Math.min(remaining, contribution);
     }
-    const getSinkingFundPerCycleTotal = () => getSinkingFunds().reduce((sum,fund)=>sum + getFundPerCycleContribution(fund),0);
-    function getSpentThisCycle(){ const today=todayISO(), lastPay=state.lastPay||""; return (state.spends||[]).filter(s => s.date && (!lastPay || s.date>=lastPay) && s.date<=today).reduce((sum,s)=>sum + Number(s.amount || 0),0); }
-    const getSpentToday = () => (state.spends||[]).filter(s => s.date===todayISO()).reduce((sum,s)=>sum + Number(s.amount || 0),0);
-    function getSafeToSpendNow(){
-      const carry = Number(state.carryBalance || 0);
-      const dueBills = getTotalBillsBeforeNextPay();
-      const sinkingFunds = getSinkingFundPerCycleTotal();
-      const savings = Number(state.weeklySavingsTarget || 0);
-      return carry - dueBills - sinkingFunds - savings;
-    }
-    const getDaysIntoCycle = () => !state.lastPay ? 1 : Math.max(1, daysBetween(state.lastPay, todayISO()) + 1);
+    
+const getSinkingFundPerCycleTotal = () => getSinkingFunds().reduce((sum,fund)=>sum + getFundPerCycleContribution(fund),0);
+
+function getPlannedSinkingContributionEntries(){
+  return getSinkingFunds()
+    .map(fund => {
+      const originalIndex = state.bills.findIndex(b => b === fund);
+      return {
+        originalIndex,
+        fund,
+        planned: Number(getFundPerCycleContribution(fund) || 0),
+        dueDate: fund.dueDate || "9999-12-31"
+      };
+    })
+    .sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+}
+
+function applySinkingShortfall(shortfall){
+  let remaining = Number(shortfall || 0);
+  if(remaining <= 0) return 0;
+
+  const entries = getPlannedSinkingContributionEntries();
+  for(const entry of entries){
+    if(remaining <= 0) break;
+    const fund = state.bills[entry.originalIndex];
+    if(!fund) continue;
+
+    const available = Number(fund.savedBalance || 0);
+    if(available <= 0) continue;
+
+    const used = Math.min(available, remaining);
+    fund.savedBalance = available - used;
+    remaining -= used;
+  }
+
+  return remaining;
+}
+
+function applyOverspendProtection(){
+  let safe = getSafeToSpendNow();
+  if(safe >= 0) return 0;
+
+  let deficit = Math.abs(safe);
+
+  const savings = Number(state.savingsBalance || 0);
+  const fromSavings = Math.min(deficit, savings);
+  state.savingsBalance = savings - fromSavings;
+  deficit -= fromSavings;
+
+  if(deficit > 0){
+    deficit = applySinkingShortfall(deficit);
+  }
+
+  return deficit;
+}
+
+function settleCycleProtection(){
+  const plannedSavings = Number(state.weeklySavingsTarget || 0);
+  const cycleSafeBeforeSettlement = Number(getSafeToSpendNow() || 0);
+  const overspend = Math.max(0, -cycleSafeBeforeSettlement);
+
+  const sinkingEntries = getPlannedSinkingContributionEntries();
+  sinkingEntries.forEach(entry => {
+    const fund = state.bills[entry.originalIndex];
+    if(!fund) return;
+    fund.savedBalance = Number(fund.savedBalance || 0) + Number(entry.planned || 0);
+  });
+
+  const savingsActuallyAdded = Math.max(0, plannedSavings - overspend);
+  state.savingsBalance = Number(state.savingsBalance || 0) + savingsActuallyAdded;
+
+  const sinkingShortfall = Math.max(0, overspend - plannedSavings);
+  const unresolvedShortfall = applySinkingShortfall(sinkingShortfall);
+
+  return {
+    plannedSavings,
+    overspend,
+    savingsActuallyAdded,
+    sinkingShortfall,
+    unresolvedShortfall
+  };
+}
+
+function getSafeToSpendNow(){
+  const carry = Number(state.carryBalance || 0);
+  const dueBills = getTotalBillsBeforeNextPay();
+  const sinkingFunds = getSinkingFundPerCycleTotal();
+  const savings = Number(state.weeklySavingsTarget || 0);
+  return carry - dueBills - sinkingFunds - savings;
+}
+
+const getDaysIntoCycle = () => !state.lastPay ? 1 : Math.max(1, daysBetween(state.lastPay, todayISO()) + 1);
     const getAverageDailySpend = () => getSpentThisCycle() / getDaysIntoCycle();
     const getProjectedSpendToPayday = () => (state.nextPay ? daysBetween(todayISO(), state.nextPay) : 0) * getAverageDailySpend();
     const getProjectedLeftByPayday = () => getSafeToSpendNow() - getProjectedSpendToPayday();
@@ -611,48 +691,50 @@ const SUPABASE_KEY = "sb_publishable_MUD1p1806N-BbidyrQsAig_BJLwwQ4U";
     function getCurrentStreak(){ const items=[...(state.history||[])].reverse(); let streak=0; for(const item of items){ if(Number(item.score||0)>=80) streak++; else break; } if(getCurrentCycleScore()>=80) streak++; return streak; }
     const getTodayBudget = () => { const safe=getSafeToSpendNow(), today=todayISO(), nextPay=state.nextPay||today, days=Math.max(1, daysBetween(today,nextPay)+1); return safe / days; };
 
-    function processPaydayRollover(){
-      if(!state.nextPay || !state.lastPay) return false;
-      if(todayISO() < state.nextPay) return false;
-      const closingScore=getCurrentCycleScore(), closingSafe=getSafeToSpendNow(), cycleSpent=getSpentThisCycle(), closingDate=state.nextPay, incomeAdded=Number(state.nextPayAmount || state.expectedIncome || 0), savingsMoved=Number(state.weeklySavingsTarget || 0);
-      state.history = state.history || [];
-      state.history.push({label:`${state.lastPay || "Start"} → ${closingDate}`, spent:cycleSpent, left:closingSafe, score:closingScore, income:incomeAdded});
-      state.carryBalance = Number(state.carryBalance || 0) + incomeAdded;
-      for(const fund of state.bills){
-        if((fund.type||"due")==="sinking"){
-          const addAmount = getFundPerCycleContribution(fund);
-          if(addAmount > 0){
-            fund.savedBalance = Number(fund.savedBalance || 0) + addAmount;
-            state.carryBalance = Number(state.carryBalance || 0) - addAmount;
-          }
-        }
-      }
-      if(savingsMoved > 0){
-        state.savingsBalance = Number(state.savingsBalance || 0) + savingsMoved;
-        state.carryBalance = Number(state.carryBalance || 0) - savingsMoved;
-      }
-      if(Number(state.followingPayAmount || 0) > 0) state.nextPayAmount = state.followingPayAmount;
-      state.lastPay = closingDate;
-      state.nextPay = getNextPayDateFrom(state.lastPay, state.payFrequency);
-      state.bestStreak = Math.max(Number(state.bestStreak || 0), getCurrentStreak());
-      return true;
-    }
-    async function runAutomaticRolloversIfNeeded(){
-      let changed=false, loops=0;
-      while(loops < 24 && processPaydayRollover()){ changed=true; loops++; }
-      if(changed) await saveBudgetData();
-    }
+    
+function processPaydayRollover(){
+  if(!state.nextPay || !state.lastPay) return false;
+  if(todayISO() < state.nextPay) return false;
 
-    function setStatusBox(message, kind){ const box=$("statusBox"); box.className="notice " + kind; box.textContent=message; }
-    function renderLogo(){ const box=$("logoBox"); if(!box) return; box.innerHTML = (state.logo && String(state.logo).trim()!=="") ? `<img src="${state.logo}" alt="BudgetFlow logo">` : `<img src="icon-192.png" alt="BudgetFlow logo">`; }
-    function renderAuthLogo(){ const box=$("authLogoBox"); if(!box) return; box.innerHTML = (state.logo && String(state.logo).trim()!=="") ? `<img src="${state.logo}" alt="BudgetFlow logo">` : `<img src="icon-192.png" alt="BudgetFlow logo">`; }
-    function renderMembership(){ $("budgetIdInput").value=currentHousehold?.budget_code||""; $("inviteCodeInput").value=currentHousehold?.invite_code||""; $("memberBox").textContent=(currentHousehold?.mode==="shared" ? "Shared" : "Solo") + " budget connected"; }
-    function renderPeople(){ const people=getPeople(); $("spendPerson").innerHTML=people.map(name => `<option value="${name}">${name}</option>`).join(""); }
-    function renderUpcomingBills(){
-      const bills=getUpcomingBills();
-      $("upcomingBillsCount").textContent=`${bills.length} bill${bills.length===1?"":"s"}`;
-      $("upcomingBillsList").innerHTML = bills.length ? bills.map(b => `<div class="item"><div class="between"><div><div><strong>${b.name || "Bill"}</strong></div><div class="small">Due Bill • ${b.frequency || "Bill"} • due ${b.occurrenceDate || b.dueDate}</div></div><div><strong>${money(b.amount || 0)}</strong></div></div></div>`).join("") : `<div class="small">No due bills before next pay.</div>`;
-    }
+  const closingDate = state.nextPay;
+  const closingScore = getCurrentCycleScore();
+  const closingSafe = getSafeToSpendNow();
+  const cycleSpent = getSpentThisCycle();
+  const incomeAdded = Number(state.nextPayAmount || state.expectedIncome || 0);
+
+  const settlement = settleCycleProtection();
+
+  state.history = state.history || [];
+  state.history.push({
+    label:`${state.lastPay || "Start"} → ${closingDate}`,
+    spent:cycleSpent,
+    left:closingSafe,
+    score:closingScore,
+    income:incomeAdded,
+    savingsAdded:settlement.savingsActuallyAdded,
+    overspend:settlement.overspend
+  });
+
+  state.carryBalance = Number(state.carryBalance || 0) + incomeAdded;
+
+  if(Number(state.followingPayAmount || 0) > 0){
+    state.nextPayAmount = state.followingPayAmount;
+  }
+
+  state.lastPay = closingDate;
+  state.nextPay = getNextPayDateFrom(state.lastPay, state.payFrequency);
+  state.bestStreak = Math.max(Number(state.bestStreak || 0), getCurrentStreak());
+  return true;
+}
+
+async function runAutomaticRolloversIfNeeded(){
+  let changed = false, loops = 0;
+  while(loops < 24 && processPaydayRollover()){
+    changed = true;
+    loops++;
+  }
+  if(changed) await saveBudgetData();
+}
     function renderSinkingFunds(){
       const funds=getSinkingFunds();
       $("sinkingCountPill").textContent=`${funds.length} fund${funds.length===1?"":"s"}`;
@@ -715,90 +797,160 @@ const SUPABASE_KEY = "sb_publishable_MUD1p1806N-BbidyrQsAig_BJLwwQ4U";
       $("yearSaved").textContent = money(yearSaved);
     }
     
-    function renderHomeStats(){
-      const safe=getSafeToSpendNow(), todayBudget=getTodayBudget(), spentToday=getSpentToday(), leftToday=todayBudget - spentToday;
-      const goal=Number(state.savingsGoal||0), savingsBalance=Number(state.savingsBalance||0), goalPct=goal>0?Math.min((savingsBalance/goal)*100,100):0;
-      const daysToPay=state.nextPay?daysBetween(todayISO(),state.nextPay):0, carry=Number(state.carryBalance||0);
-      const cautionThreshold=Math.max(50, carry*0.15), projectedSpend=getProjectedSpendToPayday(), projectedLeft=getProjectedLeftByPayday(), score=getCurrentCycleScore(), streak=getCurrentStreak(), billsBeforeNextPay=getTotalBillsBeforeNextPay(), sinkingThisCycle=getSinkingFundPerCycleTotal();
-      $("availableNow").textContent = money(safe); $("safeToday").textContent = money(todayBudget); $("leftToday").textContent = money(leftToday);
-      $("currentScore").textContent = score; $("currentStreak").textContent = streak;
-      $("sumBankBalance").textContent = money(carry); $("sumLockedBills").textContent = money(billsBeforeNextPay); $("sumLockedNext").textContent = money(sinkingThisCycle); $("sumSafeSpend").textContent = money(safe);
-      $("sumCarry").textContent = money(carry); $("sumExtraPay").textContent = money(Number(state.extraPayTotal||0)); $("sumNextPayAmount").textContent = money(Number(state.nextPayAmount||0)); $("sumFollowingPayAmount").textContent = money(Number(state.followingPayAmount||0));
-      $("sumSinkingFunds").textContent = money(sinkingThisCycle); $("sumSavingsTarget").textContent = money(Number(state.weeklySavingsTarget||0)); $("sumFun").textContent = money(Number(state.funTarget||0)); $("sumCurrentOnly").textContent = money(safe);
-      $("sumSavingsGoal").textContent = money(goal); $("sumSavingsBalance").textContent = money(savingsBalance); $("sumWeeklySavings").textContent = money(Number(state.weeklySavingsTarget||0)); $("sumRemainingGoal").textContent = money(Math.max(0, goal - savingsBalance)); $("goalProgressPill").textContent = `${Math.round(goalPct)}%`; $("goalProgressBar").style.width = `${goalPct}%`;
-      if(score >= 90) $("scoreMessage").textContent = "🔥 Elite week. You're making future money decisions easier.";
-      else if(score >= 80) $("scoreMessage").textContent = "🔥 Strong week. Keep protecting the basics and the wins keep stacking.";
-      else if(score >= 60) $("scoreMessage").textContent = "🙂 Solid base. Tighten a few decisions and your score climbs fast.";
-      else $("scoreMessage").textContent = "🔁 Reset week. Protect essentials first, then rebuild momentum.";
-      $("todayBudgetCard").className = "stat"; $("leftTodayCard").className = "stat";
-      if(safe < 0 || leftToday < 0){
-        setStatusBox("🔴 Stop spending. Protect essentials first.", "dangerBox");
-        $("forecastBox").className = "notice dangerBox";
-        $("forecastBox").textContent = `At this pace, you could finish ${money(projectedLeft)} by payday. Cut back now and protect the landing.`;
-        $("todayBudgetCard").classList.add("bad"); $("leftTodayCard").classList.add("bad");
-      } else if(projectedLeft < 0 || safe <= cautionThreshold || leftToday <= todayBudget * 0.25){
-        setStatusBox("🟠 Ease off a touch. Small choices now save the cycle.", "warnBox");
-        $("forecastBox").className = "notice warnBox";
-        $("forecastBox").textContent = `At ${money(getAverageDailySpend())}/day, you'll likely use ${money(projectedSpend)} more before payday and finish around ${money(projectedLeft)}.`;
-        $("todayBudgetCard").classList.add("caution"); $("leftTodayCard").classList.add("caution");
-      } else {
-        setStatusBox("🟢 You’re in control. Calm money is good money.", "ok");
-        $("forecastBox").className = "notice ok";
-        $("forecastBox").textContent = `At this pace, you should reach payday with about ${money(projectedLeft)} left. Great job staying ahead.`;
-        $("todayBudgetCard").classList.add("good"); $("leftTodayCard").classList.add("good");
-      }
-      $("syncBox").textContent = currentHousehold ? (isEditing ? "Sync paused while editing." : "Connected and syncing.") : "Connecting…";
-      $("cycleLockBox").textContent = state.nextPay ? `Cycle active until ${state.nextPay}. Payday rollover runs automatically. ${daysToPay}d to pay.` : "Set your pay dates to activate your cycle.";
+    
+function renderHomeStats(){
+  const safe = getSafeToSpendNow();
+  const todayBudget = getTodayBudget();
+  const spentToday = getSpentToday();
+  const leftToday = todayBudget - spentToday;
+
+  const goal = Number(state.savingsGoal || 0);
+  const savingsBalance = Number(state.savingsBalance || 0);
+  const goalPct = goal > 0 ? Math.min((savingsBalance / goal) * 100, 100) : 0;
+
+  const daysToPay = state.nextPay ? daysBetween(todayISO(), state.nextPay) : 0;
+  const carry = Number(state.carryBalance || 0);
+  const cautionThreshold = Math.max(50, Math.max(0, safe) * 0.15);
+
+  const projectedSpend = getProjectedSpendToPayday();
+  const projectedLeft = getProjectedLeftByPayday();
+
+  const score = getCurrentCycleScore();
+  const streak = getCurrentStreak();
+  const billsBeforeNextPay = getTotalBillsBeforeNextPay();
+  const sinkingThisCycle = getSinkingFundPerCycleTotal();
+
+  $("availableNow").textContent = money(safe);
+  $("safeToday").textContent = money(todayBudget);
+  $("leftToday").textContent = money(leftToday);
+  $("currentScore").textContent = score;
+  $("currentStreak").textContent = streak;
+
+  $("sumLockedBills").textContent = money(billsBeforeNextPay);
+  $("sumLockedNext").textContent = money(sinkingThisCycle);
+  $("sumSafeSpend").textContent = money(safe);
+
+  $("sumCarry").textContent = money(carry);
+  $("sumExtraPay").textContent = money(Number(state.extraPayTotal || 0));
+  $("sumNextPayAmount").textContent = money(Number(state.nextPayAmount || 0));
+  $("sumSinkingFunds").textContent = money(sinkingThisCycle);
+  $("sumSavingsTarget").textContent = money(Number(state.weeklySavingsTarget || 0));
+  $("sumFun").textContent = money(Number(state.funTarget || 0));
+  $("sumCurrentOnly").textContent = money(safe);
+
+  $("sumSavingsGoal").textContent = money(goal);
+  $("sumSavingsBalance").textContent = money(savingsBalance);
+  $("sumWeeklySavings").textContent = money(Number(state.weeklySavingsTarget || 0));
+  $("sumRemainingGoal").textContent = money(Math.max(0, goal - savingsBalance));
+  $("goalProgressPill").textContent = `${Math.round(goalPct)}%`;
+  $("goalProgressBar").style.width = `${goalPct}%`;
+
+  if(score >= 90) $("scoreMessage").textContent = "🔥 Elite week. You're making future money decisions easier.";
+  else if(score >= 80) $("scoreMessage").textContent = "🔥 Strong week. Keep protecting the basics and the wins keep stacking.";
+  else if(score >= 60) $("scoreMessage").textContent = "🙂 Solid base. Tighten a few decisions and your score climbs fast.";
+  else $("scoreMessage").textContent = "🔁 Reset week. Protect essentials first, then rebuild momentum.";
+
+  $("todayBudgetCard").className = "stat";
+  $("leftTodayCard").className = "stat";
+
+  if(safe < 0 || leftToday < 0){
+    setStatusBox("🔴 Stop spending. Protect essentials first.", "dangerBox");
+    $("forecastBox").className = "notice dangerBox";
+    $("forecastBox").textContent = `At this pace, you may finish the cycle around ${money(projectedLeft)}. Pull back now and protect the essentials.`;
+    $("todayBudgetCard").classList.add("bad");
+    $("leftTodayCard").classList.add("bad");
+  } else if(projectedLeft < 0 || safe <= cautionThreshold || leftToday <= todayBudget * 0.25){
+    setStatusBox("🟠 Ease off a touch. Small choices now save the cycle.", "warnBox");
+    $("forecastBox").className = "notice warnBox";
+    $("forecastBox").textContent = `At ${money(getAverageDailySpend())}/day, you'll likely use ${money(projectedSpend)} more before payday and finish around ${money(projectedLeft)}.`;
+    $("todayBudgetCard").classList.add("caution");
+    $("leftTodayCard").classList.add("caution");
+  } else {
+    setStatusBox("🟢 You’re in control. Calm money is good money.", "ok");
+    $("forecastBox").className = "notice ok";
+    $("forecastBox").textContent = `At this pace, you should reach payday with about ${money(projectedLeft)} left. Great job staying ahead.`;
+    $("todayBudgetCard").classList.add("good");
+    $("leftTodayCard").classList.add("good");
+  }
+
+  $("syncBox").textContent = currentHousehold ? (isEditing ? "Sync paused while editing." : "Connected and syncing.") : "Connecting…";
+  $("cycleLockBox").textContent = state.nextPay ? `Cycle active until ${state.nextPay}. Payday rollover runs automatically. ${daysToPay}d to pay.` : "Set your pay dates to activate your cycle.";
+}
+
+
+function renderFormValues(){
+  $("heroTitle").textContent = state.appName || "BudgetFlow";
+  $("appName").value = state.appName || "";
+  $("person1Name").value = state.person1Name || "";
+  $("person2Name").value = state.person2Name || "";
+  $("carryBalance").value = state.carryBalance || "";
+  $("expectedIncome").value = state.expectedIncome || "";
+  $("nextPayAmount").value = state.nextPayAmount || "";
+  $("followingPayAmount").value = state.followingPayAmount || "";
+  $("savingsGoal").value = state.savingsGoal || "";
+  $("savingsBalance").value = state.savingsBalance || "";
+  $("weeklySavingsTarget").value = state.weeklySavingsTarget || "";
+  $("funTarget").value = state.funTarget || "";
+  $("currency").value = state.currency || "AUD";
+  $("payFrequency").value = state.payFrequency || "weekly";
+  $("lastPay").value = state.lastPay || "";
+  $("nextPay").value = state.nextPay || "";
+  $("spendDate").value = $("spendDate").value || todayISO();
+}
+
+function renderAll(){
+  renderLogo();
+  renderAuthLogo();
+  renderMembership();
+  renderPlanBox();
+  renderPeople();
+  renderFormValues();
+  renderHomeStats();
+  renderUpcomingBills();
+  renderSinkingFunds();
+  renderSpends();
+  renderBills();
+  renderHistory();
+}
+
+function failOpenToAuth(msg, cls="warnBox"){
+  showAuth();
+  $("authForms").classList.remove("hidden");
+  $("membershipPanel").classList.add("hidden");
+  $("loginPanel").classList.remove("hidden");
+  $("signupPanel").classList.add("hidden");
+  authStatus(msg || "Log in to continue.", cls);
+}
+
+async function checkAuth() {
+  try {
+    authStatus("Checking session…", "sync");
+
+    const result = await Promise.race([
+      sb.auth.getSession(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Session check timed out")), 4000)
+      )
+    ]);
+
+    const session = result?.data?.session || null;
+
+    if (session?.user) {
+      currentUser = session.user;
+      await loadSubscription();
+      if(!enforceSubscriptionAccess()) return;
+      await showMembership();
+      return;
     }
-    function renderFormValues(){
-      $("heroTitle").textContent = state.appName || "BudgetFlow"; $("appName").value = state.appName || ""; $("person1Name").value = state.person1Name || ""; $("person2Name").value = state.person2Name || "";
-      $("carryBalance").value = state.carryBalance || ""; $("expectedIncome").value = state.expectedIncome || ""; $("nextPayAmount").value = state.nextPayAmount || ""; $("followingPayAmount").value = state.followingPayAmount || "";
-      $("savingsGoal").value = state.savingsGoal || ""; $("savingsBalance").value = state.savingsBalance || ""; $("weeklySavingsTarget").value = state.weeklySavingsTarget || ""; $("funTarget").value = state.funTarget || "";
-      $("currency").value = state.currency || "AUD"; $("payFrequency").value = state.payFrequency || "weekly"; $("lastPay").value = state.lastPay || ""; $("nextPay").value = state.nextPay || ""; $("spendDate").value = $("spendDate").value || todayISO();
-    }
-    function renderAll(){ renderLogo(); renderAuthLogo(); renderMembership(); renderPlanBox(); renderPeople(); renderFormValues(); renderHomeStats(); renderUpcomingBills(); renderSinkingFunds(); renderSpends(); renderBills(); renderHistory(); }
 
-    async function checkAuth() {
-      try {
-        if(!sb){
-          failOpenToAuth("Supabase failed to load. Refresh and try again.");
-          return;
-        }
+    failOpenToAuth("Log in to continue.", "sync");
+  } catch (err) {
+    console.error("checkAuth failed", err);
+    failOpenToAuth("Log in to continue.");
+  }
+}
 
-        authStatus("Checking session…", "sync");
-
-        const result = await Promise.race([
-          sb.auth.getSession(),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("Session check timed out")), 4000))
-        ]);
-
-        const session = result?.data?.session || null;
-
-        if (session?.user) {
-          currentUser = session.user;
-          await loadSubscription();
-          if(!enforceSubscriptionAccess()) return;
-          await showMembership();
-          return;
-        }
-
-        showAuth();
-        $("authForms").classList.remove("hidden");
-        $("membershipPanel").classList.add("hidden");
-        $("loginPanel").classList.remove("hidden");
-        $("signupPanel").classList.add("hidden");
-        authStatus("Log in to continue.", "sync");
-      } catch (err) {
-        console.error("checkAuth failed", err);
-        showAuth();
-        $("authForms").classList.remove("hidden");
-        $("membershipPanel").classList.add("hidden");
-        $("loginPanel").classList.remove("hidden");
-        $("signupPanel").classList.add("hidden");
-        authStatus("Log in to continue.", "warnBox");
-      }
-    }
-    async function login(){
+async function login(){
       const email=$("loginEmail").value.trim(), password=$("loginPassword").value;
       authStatus("Logging you in…", "sync");
       const { data, error } = await sb.auth.signInWithPassword({ email, password });
@@ -930,21 +1082,26 @@ if (!data || !data.length) {
         await sb.from("shared_budgets").insert([{ id:currentHousehold.budget_code, household_id:currentHousehold.id, payload:defaultState }]);
       }
     }
-    async function loadBudgetData(){
-      if(!currentHousehold) return;
-      const { data, error } = await sb.from("shared_budgets").select("*").eq("id", currentHousehold.budget_code).single();
-      if(error){
-        console.error(error);
-        return;
-      }
-      if(!data || !data.payload) return;
-      if(Object.keys(data.payload).length === 0) return;
-      state = { ...structuredClone(defaultState), ...(data.payload || {}) };
-      state.bills = (state.bills || []).map(bill => ({ type:"due", savedBalance:0, ...bill }));
-      await runAutomaticRolloversIfNeeded();
-      renderAll();
-    }
-    async function saveBudgetData(){
+    
+
+async function loadBudgetData(){
+  if(!currentHousehold) return;
+  const { data, error } = await sb.from("shared_budgets").select("*").eq("id", currentHousehold.budget_code).single();
+
+  if(error){
+    console.error(error);
+    return;
+  }
+  if(!data || !data.payload) return;
+  if(Object.keys(data.payload).length === 0) return;
+
+  state = { ...structuredClone(defaultState), ...(data.payload || {}) };
+  state.bills = (state.bills || []).map(bill => ({ type:"due", savedBalance:0, ...bill }));
+  await runAutomaticRolloversIfNeeded();
+  renderAll();
+}
+
+async function saveBudgetData(){
       if(!currentHousehold) return;
       lastSaveTime = Date.now();
       
@@ -953,14 +1110,56 @@ if (!data || !data.length) {
     }
     function switchPage(page){ ["home","spends","bills","history","settings"].forEach(p => document.getElementById("page-" + p).classList.toggle("hidden", p !== page)); document.querySelectorAll(".tab").forEach(tab => tab.classList.toggle("active", tab.dataset.page === page)); }
     function editSpend(index){ const spend=state.spends[index]; if(!spend) return; $("spendName").value=spend.name||""; $("spendAmount").value=spend.amount||""; $("spendCategory").value=spend.category||"General"; $("spendPerson").value=spend.person||getPeople()[0]; $("spendDate").value=spend.date||todayISO(); currentEditSpend=index; $("cancelEditBtn").classList.remove("hidden"); switchPage("spends"); }
-    async function deleteSpend(index){ state.spends.splice(index,1); await saveBudgetData(); renderAll(); }
-    async function saveSpend(){
-      const spend={ name:$("spendName").value.trim()||"Spend", amount:Number($("spendAmount").value||0), category:$("spendCategory").value, person:$("spendPerson").value, date:$("spendDate").value||todayISO() };
-      if(currentEditSpend !== null){ state.spends[currentEditSpend] = spend; currentEditSpend = null; } else { state.spends.push(spend); }
-      $("spendName").value=""; $("spendAmount").value=""; $("spendCategory").value="General"; $("spendPerson").value=getPeople()[0]; $("spendDate").value=todayISO(); $("cancelEditBtn").classList.add("hidden");
-      await saveBudgetData(); renderAll();
-    }
-    async function addBill(){ state.bills.push({ name:"", amount:"", frequency:"monthly", dueDate:"", type:"due", savedBalance:0 }); await saveBudgetData(); renderAll(); }
+    
+async function deleteSpend(index){
+  const spend = state.spends[index];
+  if(!spend) return;
+
+  state.carryBalance = Number(state.carryBalance || 0) + Number(spend.amount || 0);
+  state.spends.splice(index,1);
+  await saveBudgetData();
+  renderAll();
+}
+
+async function saveSpend(){
+  const spend = {
+    name: $("spendName").value.trim() || "Spend",
+    amount: Number($("spendAmount").value || 0),
+    category: $("spendCategory").value,
+    person: $("spendPerson").value,
+    date: $("spendDate").value || todayISO()
+  };
+
+  const previousAmount =
+    currentEditSpend !== null && state.spends[currentEditSpend]
+      ? Number(state.spends[currentEditSpend].amount || 0)
+      : 0;
+
+  const delta = Number(spend.amount || 0) - previousAmount;
+
+  state.carryBalance = Number(state.carryBalance || 0) - delta;
+
+  if(currentEditSpend !== null){
+    state.spends[currentEditSpend] = spend;
+    currentEditSpend = null;
+  } else {
+    state.spends.push(spend);
+  }
+
+  applyOverspendProtection();
+
+  $("spendName").value = "";
+  $("spendAmount").value = "";
+  $("spendCategory").value = "General";
+  $("spendPerson").value = getPeople()[0];
+  $("spendDate").value = todayISO();
+  $("cancelEditBtn").classList.add("hidden");
+
+  await saveBudgetData();
+  renderAll();
+}
+
+async function addBill(){ state.bills.push({ name:"", amount:"", frequency:"monthly", dueDate:"", type:"due", savedBalance:0 }); await saveBudgetData(); renderAll(); }
     async function updateBill(index,key,value){ if(!state.bills[index]) return; state.bills[index][key] = value; await saveBudgetData(); renderAll(); }
     async function deleteBill(index){ state.bills.splice(index,1); await saveBudgetData(); renderAll(); }
     async function addToFund(index){
@@ -1051,27 +1250,28 @@ if (!data || !data.length) {
     document.addEventListener("focusout", e => { if(e.target.matches("input, select, textarea")) markEditingOff(); });
 
     try {
-      bindSettings();
-      handleInviteFromUrl();
-      checkAuth().catch(err => {
-        console.error("checkAuth failed", err);
-        showAuth();
-        $("authForms").classList.remove("hidden");
-        $("membershipPanel").classList.add("hidden");
-        $("loginPanel").classList.remove("hidden");
-        $("signupPanel").classList.add("hidden");
-        authStatus("Log in to continue.", "warnBox");
-      });
-    } catch (err) {
-      console.error("startup failed", err);
-      showAuth();
-      $("authForms").classList.remove("hidden");
-      $("membershipPanel").classList.add("hidden");
-      $("loginPanel").classList.remove("hidden");
-      $("signupPanel").classList.add("hidden");
-      authStatus("The app hit an error while loading. Please refresh.", "dangerBox");
-    }
+  bindSettings();
+  handleInviteFromUrl();
 
+  checkAuth().catch(err => {
+    console.error("checkAuth failed", err);
+    showAuth();
+    $("authForms").classList.remove("hidden");
+    $("membershipPanel").classList.add("hidden");
+    $("loginPanel").classList.remove("hidden");
+    $("signupPanel").classList.add("hidden");
+    authStatus("Log in to continue.", "warnBox");
+  });
+
+} catch (err) {
+  console.error("startup failed", err);
+  showAuth();
+  $("authForms").classList.remove("hidden");
+  $("membershipPanel").classList.add("hidden");
+  $("loginPanel").classList.remove("hidden");
+  $("signupPanel").classList.add("hidden");
+  authStatus("The app hit an error while loading. Please refresh.", "dangerBox");
+}
     setInterval(() => {
       if (!currentHousehold) return;
       if (isEditing) return;
