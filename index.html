@@ -897,7 +897,23 @@ function renderFormValues(){
   $("nextPay").value = state.nextPay || "";
   $("spendDate").value = $("spendDate").value || todayISO();
 }
+function renderLogo(){
+  const box = $("logoBox");
+  if(!box) return;
 
+  box.innerHTML = (state.logo && String(state.logo).trim() !== "")
+    ? `<img src="${state.logo}" alt="BudgetFlow logo">`
+    : `<img src="icon-192.png" alt="BudgetFlow logo">`;
+}
+
+function renderAuthLogo(){
+  const box = $("authLogoBox");
+  if(!box) return;
+
+  box.innerHTML = (state.logo && String(state.logo).trim() !== "")
+    ? `<img src="${state.logo}" alt="BudgetFlow logo">`
+    : `<img src="icon-192.png" alt="BudgetFlow logo">`;
+}
 function renderAll(){
   renderLogo();
   renderAuthLogo();
