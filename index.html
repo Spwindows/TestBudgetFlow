@@ -76,7 +76,7 @@
   </style>
 </head>
 <body>
-  <div id="authRoot" class="authShell hidden">
+  <div id="authRoot" class="authShell">
     <div class="authCard">
       <div class="logoRow" style="margin-bottom:14px">
         <div class="logo" id="authLogoBox"><img src="icon-192.png" alt="BudgetFlow logo"></div>
@@ -375,7 +375,7 @@
   <script>
    const SUPABASE_URL = "https://ivokcqkwpzxmalugyakv.supabase.co";
 const SUPABASE_KEY = "sb_publishable_MUD1p1806N-BbidyrQsAig_BJLwwQ4U";
-    const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    const sb = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
 
     const defaultState = {
       appName: "BudgetFlow", logo: "", person1Name: "Person 1", person2Name: "Person 2",
@@ -406,7 +406,8 @@ const SUPABASE_KEY = "sb_publishable_MUD1p1806N-BbidyrQsAig_BJLwwQ4U";
     function markEditingOff(){ clearTimeout(editReleaseTimer); editReleaseTimer = setTimeout(() => { isEditing = false; }, 600); }
     function showAuth(){ $("authRoot").classList.remove("hidden"); $("appRoot").classList.add("hidden"); }
     function showApp(){ $("authRoot").classList.add("hidden"); $("appRoot").classList.remove("hidden"); }
-    function authStatus(msg, cls="sync"){ const el = $("authStatus"); el.className = "notice " + cls; el.textContent = msg; }
+    function authStatus(msg, cls="sync"){ const el = $("authStatus"); if(!el) return; el.className = "notice " + cls; el.textContent = msg; }
+    function failOpenToAuth(msg){ try { showAuth(); } catch(e) {} try { authStatus(msg || "Something went wrong loading the app. Please refresh.", "dangerBox"); } catch(e) {} }
     const getPeople = () => [state.person1Name || "Person 1", state.person2Name || "Person 2"];
     const getInviteLink = () => currentHousehold?.invite_code ? `${location.origin}${location.pathname}?invite=${currentHousehold.invite_code}` : "";
 
@@ -789,45 +790,58 @@ const SUPABASE_KEY = "sb_publishable_MUD1p1806N-BbidyrQsAig_BJLwwQ4U";
     function renderAll(){ renderLogo(); renderAuthLogo(); renderMembership(); renderPlanBox(); renderPeople(); renderFormValues(); renderHomeStats(); renderUpcomingBills(); renderSinkingFunds(); renderSpends(); renderBills(); renderHistory(); }
 
     async function checkAuth() {
-  const { data: { session } } = await sb.auth.getSession();
-
-  if (session?.user) {
-    currentUser = session.user;
-    await loadSubscription();
-
-    const pendingInvite = localStorage.getItem("pendingInviteCode");
-    if (pendingInvite) {
-      console.log("Invite detected on login:", pendingInvite);
+  try {
+    if(!sb){
+      failOpenToAuth("Supabase failed to load. Refresh and try again.");
+      return;
     }
+    const { data: { session } } = await sb.auth.getSession();
 
-    if(!enforceSubscriptionAccess()) return;
-    await showMembership();
-
-  } else {
-    showAuth();
+    if (session?.user) {
+      currentUser = session.user;
+      await loadSubscription();
+      const pendingInvite = localStorage.getItem("pendingInviteCode");
+      if (pendingInvite) console.log("Invite detected on login:", pendingInvite);
+      if(!enforceSubscriptionAccess()) return;
+      await showMembership();
+    } else {
+      showAuth();
+      authStatus("Log in to continue.", "sync");
+    }
+  } catch (err) {
+    console.error("checkAuth failed", err);
+    failOpenToAuth("Could not start the app. Please refresh and try again.");
   }
 }
     async function login(){
-      const email=$("loginEmail").value.trim(), password=$("loginPassword").value;
-      authStatus("Logging you in…", "sync");
-      const { data, error } = await sb.auth.signInWithPassword({ email, password });
-      if(error){ authStatus(error.message, "dangerBox"); return; }
-      if(data?.session?.user){
-        currentUser = data.session.user;
-        await loadSubscription();
-        if(!enforceSubscriptionAccess()) return;
-        await showMembership();
-        return;
+      try {
+        if(!sb){ failOpenToAuth("Supabase failed to load. Refresh and try again."); return; }
+        const email=$("loginEmail").value.trim(), password=$("loginPassword").value;
+        authStatus("Logging you in…", "sync");
+        const { data, error } = await sb.auth.signInWithPassword({ email, password });
+        if(error){ authStatus(error.message, "dangerBox"); return; }
+        const user = data?.session?.user || data?.user;
+        if(user){
+          currentUser = user;
+          await loadSubscription();
+          if(!enforceSubscriptionAccess()) return;
+          await showMembership();
+          return;
+        }
+        const { data: sessionData } = await sb.auth.getSession();
+        if(sessionData?.session?.user){
+          currentUser = sessionData.session.user;
+          await loadSubscription();
+          if(!enforceSubscriptionAccess()) return;
+          await showMembership();
+          return;
+        }
+        authStatus("Login succeeded, but no session was returned. Please refresh and try again.", "warnBox");
+      } catch (err) {
+        console.error("login failed", err);
+        authStatus("Login failed. Please refresh and try again.", "dangerBox");
+        showAuth();
       }
-      const { data: sessionData } = await sb.auth.getSession();
-      if(sessionData?.session?.user){
-        currentUser = sessionData.session.user;
-        await loadSubscription();
-        if(!enforceSubscriptionAccess()) return;
-        await showMembership();
-        return;
-      }
-      authStatus("Login succeeded, but no session was returned. Please refresh and try again.", "warnBox");
     }
     async function signup(){
       const email=$("signupEmail").value.trim(), password=$("signupPassword").value, name=$("signupName").value.trim();
@@ -1060,17 +1074,30 @@ if (!data || !data.length) {
     document.addEventListener("focusin", e => { if(e.target.matches("input, select, textarea")) markEditingOn(); });
     document.addEventListener("focusout", e => { if(e.target.matches("input, select, textarea")) markEditingOff(); });
 
-    bindSettings();
-    handleInviteFromUrl();
-    checkAuth();
+    window.addEventListener("error", (e) => {
+      console.error("window error", e.error || e.message);
+      failOpenToAuth("The app hit an error while loading. Please refresh.");
+    });
+    window.addEventListener("unhandledrejection", (e) => {
+      console.error("promise rejection", e.reason);
+      failOpenToAuth("The app hit an error while loading. Please refresh.");
+    });
+
+    try {
+      bindSettings();
+      handleInviteFromUrl();
+      checkAuth();
+    } catch (err) {
+      console.error("startup failed", err);
+      failOpenToAuth("The app could not start. Please refresh.");
+    }
 
     setInterval(() => {
-  if (!currentHousehold) return;
-  if (isEditing) return;
-  if (Date.now() - lastSaveTime < 3000) return;
-
-  loadBudgetData();
-}, 4000);
+      if (!currentHousehold) return;
+      if (isEditing) return;
+      if (Date.now() - lastSaveTime < 3000) return;
+      loadBudgetData().catch(err => console.error("background sync failed", err));
+    }, 4000);
   </script>
 </body>
 </html>
