@@ -951,26 +951,67 @@ async function checkAuth() {
 }
 
 async function login(){
-      const email=$("loginEmail").value.trim(), password=$("loginPassword").value;
-      authStatus("Logging you in…", "sync");
-      const { data, error } = await sb.auth.signInWithPassword({ email, password });
-      if(error){ authStatus(error.message, "dangerBox"); return; }
-      if(data?.session?.user){
-        currentUser = data.session.user;
-        await loadSubscription();
-        if(!enforceSubscriptionAccess()) return;
-        await showMembership();
-        return;
+      try {
+        const email = $("loginEmail").value.trim();
+        const password = $("loginPassword").value;
+
+        authStatus("Logging you in…", "sync");
+
+        const result = await Promise.race([
+          sb.auth.signInWithPassword({ email, password }),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("Login timed out")), 8000)
+          )
+        ]);
+
+        const { data, error } = result || {};
+        if (error) {
+          authStatus(error.message || "Login failed.", "dangerBox");
+          return;
+        }
+
+        const user = data?.session?.user || data?.user || null;
+        if (user) {
+          currentUser = user;
+          await loadSubscription();
+          if (!enforceSubscriptionAccess()) return;
+
+          await Promise.race([
+            showMembership(),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error("Membership lookup timed out")), 8000)
+            )
+          ]);
+          return;
+        }
+
+        const sessionResult = await Promise.race([
+          sb.auth.getSession(),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("Session read timed out")), 4000)
+          )
+        ]);
+
+        const sessionUser = sessionResult?.data?.session?.user || null;
+        if (sessionUser) {
+          currentUser = sessionUser;
+          await loadSubscription();
+          if (!enforceSubscriptionAccess()) return;
+
+          await Promise.race([
+            showMembership(),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error("Membership lookup timed out")), 8000)
+            )
+          ]);
+          return;
+        }
+
+        authStatus("Login succeeded, but no session was returned. Please refresh and try again.", "warnBox");
+      } catch (err) {
+        console.error("login failed", err);
+        failOpenToAuth("Login failed. Please try again.", "warnBox");
       }
-      const { data: sessionData } = await sb.auth.getSession();
-      if(sessionData?.session?.user){
-        currentUser = sessionData.session.user;
-        await loadSubscription();
-        if(!enforceSubscriptionAccess()) return;
-        await showMembership();
-        return;
-      }
-      authStatus("Login succeeded, but no session was returned. Please refresh and try again.", "warnBox");
     }
     async function signup(){
       const email=$("signupEmail").value.trim(), password=$("signupPassword").value, name=$("signupName").value.trim();
