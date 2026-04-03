@@ -389,6 +389,7 @@ const SUPABASE_KEY = "sb_publishable_MUD1p1806N-BbidyrQsAig_BJLwwQ4U";
     let isEditing = false;
     let editReleaseTimer = null;
     let lastSaveTime = 0;
+    let authBootResolved = false;
 
     const $ = id => document.getElementById(id);
 
@@ -799,7 +800,6 @@ async function runAutomaticRolloversIfNeeded(){
     
     
 function renderHomeStats(){
-  if (!state) return;
   const safe = getSafeToSpendNow();
   const todayBudget = getTodayBudget();
   const spentToday = getSpentToday();
@@ -898,118 +898,20 @@ function renderFormValues(){
   $("nextPay").value = state.nextPay || "";
   $("spendDate").value = $("spendDate").value || todayISO();
 }
-function renderLogo(){
-  const box = $("logoBox");
-  if(!box) return;
-
-  box.innerHTML = (state.logo && String(state.logo).trim() !== "")
-    ? `<img src="${state.logo}" alt="BudgetFlow logo">`
-    : `<img src="icon-192.png" alt="BudgetFlow logo">`;
-}
-
-function renderAuthLogo(){
-  const box = $("authLogoBox");
-  if(!box) return;
-
-  box.innerHTML = (state.logo && String(state.logo).trim() !== "")
-    ? `<img src="${state.logo}" alt="BudgetFlow logo">`
-    : `<img src="icon-192.png" alt="BudgetFlow logo">`;
-}function renderMembership(){
-  if (!$("budgetIdInput") || !$("inviteCodeInput") || !$("memberBox")) return;
-
-  $("budgetIdInput").value = currentHousehold?.budget_code || "";
-  $("inviteCodeInput").value = currentHousehold?.invite_code || "";
-
-  const mode = currentHousehold?.mode === "shared" ? "Shared" : "Solo";
-  $("memberBox").textContent = mode + " budget connected";
-}
-function safeCall(fn){
-  try { fn && fn(); } catch(e){ console.warn("UI error:", e); }
-}
-function renderPeople(){
-  const el = $("spendPerson");
-  if(!el) return;
-
-  const people = [
-    state.person1Name || "Person 1",
-    state.person2Name || "Person 2"
-  ];
-
-  el.innerHTML = people.map(name => `<option value="${name}">${name}</option>`).join("");
-}
-function safeCall(fn){
-  try {
-    if (typeof fn === "function") fn();
-  } catch (e) {
-    console.warn("UI render error:", e);
-  }
-}
-function renderLogo(){
-  const box = $("logoBox");
-  if(!box) return;
-
-  box.innerHTML = state.logo
-    ? `<img src="${state.logo}" alt="logo">`
-    : `<img src="icon-192.png" alt="logo">`;
-}
-
-function renderAuthLogo(){
-  const box = $("authLogoBox");
-  if(!box) return;
-
-  box.innerHTML = state.logo
-    ? `<img src="${state.logo}" alt="logo">`
-    : `<img src="icon-192.png" alt="logo">`;
-}
-
-function renderMembership(){
-  if(!currentHousehold) return;
-
-  if($("budgetIdInput")) $("budgetIdInput").value = currentHousehold.budget_code || "";
-  if($("inviteCodeInput")) $("inviteCodeInput").value = currentHousehold.invite_code || "";
-
-  const box = $("memberBox");
-  if(box){
-    box.textContent = currentHousehold.mode === "shared"
-      ? "Shared budget connected"
-      : "Solo budget connected";
-  }
-}
-
-function renderPeople(){
-  const el = $("spendPerson");
-  if(!el) return;
-
-  const people = [
-    state.person1Name || "Person 1",
-    state.person2Name || "Person 2"
-  ];
-
-  el.innerHTML = people.map(name =>
-    `<option value="${name}">${name}</option>`
-  ).join("");
-}
-function safeCall(fn){
-  try {
-    if (typeof fn === "function") fn();
-  } catch (e) {
-    console.warn("Render error:", e);
-  }
-}
 
 function renderAll(){
-  safeCall(renderLogo);
-  safeCall(renderAuthLogo);
-  safeCall(renderMembership);
-  safeCall(renderPlanBox);
-  safeCall(renderPeople);
-  safeCall(renderFormValues);
-  safeCall(renderHomeStats);
-  safeCall(renderUpcomingBills);
-  safeCall(renderSinkingFunds);
-  safeCall(renderSpends);
-  safeCall(renderBills);
-  safeCall(renderHistory);
+  renderLogo();
+  renderAuthLogo();
+  renderMembership();
+  renderPlanBox();
+  renderPeople();
+  renderFormValues();
+  renderHomeStats();
+  renderUpcomingBills();
+  renderSinkingFunds();
+  renderSpends();
+  renderBills();
+  renderHistory();
 }
 
 function failOpenToAuth(msg, cls="warnBox"){
@@ -1023,95 +925,98 @@ function failOpenToAuth(msg, cls="warnBox"){
 
 async function checkAuth() {
   try {
-    authStatus("Checking session...", "sync");
+    authStatus("Checking session…", "sync");
 
-    const sessionResult = await Promise.race([
+    const result = await Promise.race([
       sb.auth.getSession(),
       new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Session check timeout")), 4000)
+        setTimeout(() => reject(new Error("Session check timed out")), 4000)
       )
     ]);
 
-    const session = sessionResult?.data?.session || null;
+    const session = result?.data?.session || null;
 
     if (session?.user) {
       currentUser = session.user;
       await loadSubscription();
-
-      if (!enforceSubscriptionAccess()) return;
+      if(!enforceSubscriptionAccess()) return;
       await showMembership();
       return;
     }
 
-    showAuth();
-    $("authForms").classList.remove("hidden");
-    $("membershipPanel").classList.add("hidden");
-    $("loginPanel").classList.remove("hidden");
-    $("signupPanel").classList.add("hidden");
-    authStatus("Log in to continue.", "sync");
-
+    failOpenToAuth("Log in to continue.", "sync");
   } catch (err) {
-    console.error("checkAuth error:", err);
-    showAuth();
-    $("authForms").classList.remove("hidden");
-    $("membershipPanel").classList.add("hidden");
-    $("loginPanel").classList.remove("hidden");
-    $("signupPanel").classList.add("hidden");
-    authStatus("Log in to continue.", "warnBox");
+    console.error("checkAuth failed", err);
+    failOpenToAuth("Log in to continue.");
+  } finally {
+    authBootResolved = true;
   }
 }
-async function handleLogin() {
-  const email = $("loginEmail").value.trim();
-  const password = $("loginPassword").value;
 
-  if (!email || !password) {
-    authStatus("Enter your email and password.", "warnBox");
-    return;
-  }
+async function login(){
+      try {
+        const email = $("loginEmail").value.trim();
+        const password = $("loginPassword").value;
 
-  authStatus("Logging in...", "sync");
+        authStatus("Logging you in…", "sync");
 
-  try {
-    const { data, error } = await Promise.race([
-      sb.auth.signInWithPassword({ email, password }),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Login timeout")), 8000)
-      )
-    ]);
+        const result = await Promise.race([
+          sb.auth.signInWithPassword({ email, password }),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("Login timed out")), 8000)
+          )
+        ]);
 
-    if (error) {
-      console.error("LOGIN ERROR:", error);
-      authStatus(error.message || "Login failed. Try again.", "dangerBox");
-      return;
+        const { data, error } = result || {};
+        if (error) {
+          authStatus(error.message || "Login failed.", "dangerBox");
+          return;
+        }
+
+        const user = data?.session?.user || data?.user || null;
+        if (user) {
+          currentUser = user;
+          await loadSubscription();
+          if (!enforceSubscriptionAccess()) return;
+
+          await Promise.race([
+            showMembership(),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error("Membership lookup timed out")), 8000)
+            )
+          ]);
+          return;
+        }
+
+        const sessionResult = await Promise.race([
+          sb.auth.getSession(),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("Session read timed out")), 4000)
+          )
+        ]);
+
+        const sessionUser = sessionResult?.data?.session?.user || null;
+        if (sessionUser) {
+          currentUser = sessionUser;
+          await loadSubscription();
+          if (!enforceSubscriptionAccess()) return;
+
+          await Promise.race([
+            showMembership(),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error("Membership lookup timed out")), 8000)
+            )
+          ]);
+          return;
+        }
+
+        authStatus("Login succeeded, but no session was returned. Please refresh and try again.", "warnBox");
+      } catch (err) {
+        console.error("login failed", err);
+        failOpenToAuth("Login failed. Please try again.", "warnBox");
+      }
     }
-
-    const user = data?.session?.user || data?.user;
-
-    if (!user) {
-      authStatus("Login succeeded but no user session was returned.", "warnBox");
-      return;
-    }
-
-    currentUser = user;
-
-    await loadSubscription();
-
-    if (!enforceSubscriptionAccess()) return;
-
-    await showMembership();
-  } catch (err) {
-    console.error("LOGIN CRASH:", err);
-    authStatus(err.message || "Login failed. Try again.", "dangerBox");
-    showAuth();
-    $("authForms").classList.remove("hidden");
-    $("membershipPanel").classList.add("hidden");
-    $("loginPanel").classList.remove("hidden");
-    $("signupPanel").classList.add("hidden");
-  }
-}
     async function signup(){
-  ...
-}
       const email=$("signupEmail").value.trim(), password=$("signupPassword").value, name=$("signupName").value.trim();
       authStatus("Creating your account…", "sync");
       const { data, error } = await sb.auth.signUp({ email, password, options: { emailRedirectTo: "https://budgetannspendapp.netlify.app/", data: { full_name: name } } });
@@ -1126,52 +1031,51 @@ async function handleLogin() {
       $("loginEmail").value = email; $("loginPassword").value = ""; $("loginPanel").classList.remove("hidden"); $("signupPanel").classList.add("hidden");
     }
     async function logout(){ await sb.auth.signOut(); location.href = location.pathname; }
-async function showMembership() {
+    async function showMembership() {
   await loadSubscription();
-
   const { data, error } = await sb
     .from("household_members")
     .select("household_id, role, households(*)")
     .eq("user_id", currentUser.id);
 
-  if (error) {
-    console.error("showMembership error", error);
-    authStatus(error.message || "Could not load your membership.", "dangerBox");
-    showAuth();
-    return;
-  }
+  if (error) return alert(error.message);
 
   const pendingInvite = loadPendingInviteCode();
 
-  if (!data || !data.length) {
-    if (pendingInvite) {
-      try {
-        $("joinInviteCode").value = pendingInvite;
-        await joinSharedHousehold();
-        localStorage.removeItem("pendingInviteCode");
-        return;
-      } catch (err) {
-        console.error("Auto join failed:", err);
-        authStatus("Invite found but join failed. Tap Join Shared Budget.", "warnBox");
-      }
-    }
+if (!data || !data.length) {
 
-    $("authForms").classList.add("hidden");
-    $("membershipPanel").classList.remove("hidden");
+  if (pendingInvite) {
+    try {
+      console.log("Auto joining with invite:", pendingInvite);
 
-    if (pendingInvite) {
-      $("sharedJoinPanel").classList.remove("hidden");
       $("joinInviteCode").value = pendingInvite;
-      authStatus("You're almost in. Just tap Join Shared Budget.", "ok");
-    } else {
-      authStatus("Account ready. Choose solo or shared.", "ok");
-    }
 
-    showAuth();
-    return;
+      await joinSharedHousehold();
+
+      localStorage.removeItem("pendingInviteCode");
+      return;
+
+    } catch (err) {
+      console.error("Auto join failed:", err);
+      authStatus("Invite found but join failed. Tap join below.", "warnBox");
+    }
   }
 
-  currentHousehold = data[0].households;
+  $("authForms").classList.add("hidden");
+  $("membershipPanel").classList.remove("hidden");
+
+  if (pendingInvite) {
+    $("sharedJoinPanel").classList.remove("hidden");
+    $("joinInviteCode").value = pendingInvite;
+    authStatus("You're almost in. Just tap Join Shared Budget.", "ok");
+  } else {
+    authStatus("Account ready. Choose solo or shared.", "ok");
+  }
+
+  showAuth();
+  return;
+}
+    currentHousehold = data[0].households;
   await loadBudgetData();
   showApp();
 }
@@ -1370,7 +1274,7 @@ async function addBill(){ state.bills.push({ name:"", amount:"", frequency:"mont
     $("showSignupBtn").onclick = () => { $("signupPanel").classList.remove("hidden"); $("loginPanel").classList.add("hidden"); };
     $("goSignupInline").onclick = () => { $("signupPanel").classList.remove("hidden"); $("loginPanel").classList.add("hidden"); };
     $("goLoginInline").onclick = () => { $("loginPanel").classList.remove("hidden"); $("signupPanel").classList.add("hidden"); };
-    $("loginBtn").onclick = handleLogin; $("signupBtn").onclick = signup; $("logoutBtn").onclick = logout;
+    $("loginBtn").onclick = login; $("signupBtn").onclick = signup; $("logoutBtn").onclick = logout;
     $("createSoloHouseholdBtn").onclick = () => createHousehold("solo"); $("createSharedHouseholdBtn").onclick = () => createHousehold("shared"); $("showSharedJoinBtn").onclick = () => $("sharedJoinPanel").classList.toggle("hidden"); $("joinInviteBtn").onclick = joinSharedHousehold;
     document.querySelectorAll(".tab").forEach(tab => tab.addEventListener("click", () => switchPage(tab.dataset.page)));
     document.querySelectorAll(".quickAddBtn").forEach(btn => btn.addEventListener("click", () => { $("spendName").value = btn.dataset.name || ""; $("spendCategory").value = btn.dataset.category || "General"; switchPage("spends"); }));
@@ -1390,28 +1294,28 @@ async function addBill(){ state.bills.push({ name:"", amount:"", frequency:"mont
     document.addEventListener("focusout", e => { if(e.target.matches("input, select, textarea")) markEditingOff(); });
 
     try {
-  bindSettings();
-  handleInviteFromUrl();
+      bindSettings();
+      handleInviteFromUrl();
 
-  checkAuth().catch(err => {
-    console.error("checkAuth failed", err);
-    showAuth();
-    $("authForms").classList.remove("hidden");
-    $("membershipPanel").classList.add("hidden");
-    $("loginPanel").classList.remove("hidden");
-    $("signupPanel").classList.add("hidden");
-    authStatus("Log in to continue.", "warnBox");
-  });
+      setTimeout(() => {
+        if (!authBootResolved) {
+          console.warn("Auth bootstrap fallback triggered");
+          failOpenToAuth("Log in to continue.", "warnBox");
+          authBootResolved = true;
+        }
+      }, 5000);
 
-} catch (err) {
-  console.error("startup failed", err);
-  showAuth();
-  $("authForms").classList.remove("hidden");
-  $("membershipPanel").classList.add("hidden");
-  $("loginPanel").classList.remove("hidden");
-  $("signupPanel").classList.add("hidden");
-  authStatus("The app hit an error while loading. Please refresh.", "dangerBox");
-}
+      checkAuth().catch(err => {
+        console.error("checkAuth failed", err);
+        failOpenToAuth("Log in to continue.", "warnBox");
+        authBootResolved = true;
+      });
+    } catch (err) {
+      console.error("startup failed", err);
+      failOpenToAuth("The app hit an error while loading. Please refresh.", "dangerBox");
+      authBootResolved = true;
+    }
+
     setInterval(() => {
       if (!currentHousehold) return;
       if (isEditing) return;
