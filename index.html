@@ -526,7 +526,82 @@ const SUPABASE_KEY = "sb_publishable_MUD1p1806N-BbidyrQsAig_BJLwwQ4U";
     function updateNextPayDate(){ const lastPay = $("lastPay")?.value || state.lastPay; const frequency = $("payFrequency")?.value || state.payFrequency; const nextPay = getNextPayDateFrom(lastPay, frequency); state.nextPay = nextPay; if($("nextPay")) $("nextPay").value = nextPay; }
     function getCyclesPerYear(){ if(state.payFrequency==="weekly") return 52; if(state.payFrequency==="fortnightly") return 26; if(state.payFrequency==="fourweekly") return 13; if(state.payFrequency==="monthly") return 12; return 52; }
     function getBillFrequencyPerYear(frequency){ if(frequency==="weekly") return 52; if(frequency==="fortnightly") return 26; if(frequency==="fourweekly") return 13; if(frequency==="monthly") return 12; if(frequency==="annual") return 1; return 0; }
-    function getUpcomingBills(){ const today=todayISO(), nextPay=state.nextPay||today; return (state.bills||[]).filter(b => (b.type||"due")==="due").filter(b => b && b.dueDate && b.amount!=="").filter(b => b.dueDate>=today && b.dueDate<=nextPay).sort((a,b)=>a.dueDate.localeCompare(b.dueDate)); }
+    function getUpcomingBillsInRange(startDate, endDate){
+      const expanded = [];
+      (state.bills||[])
+        .filter(b => (b.type||"due")==="due")
+        .filter(b => b && b.dueDate && b.amount!=="")
+        .forEach(bill => {
+          const amount = Number(bill.amount || 0);
+          let next = bill.dueDate;
+
+          if(!bill.frequency || bill.frequency === "once"){
+            if(next >= startDate && next <= endDate){
+              expanded.push({ ...bill, occurrenceDate: next, amount });
+            }
+            return;
+          }
+
+          while(next < startDate){
+            if(bill.frequency === "weekly") next = addDaysToDate(next, 7);
+            else if(bill.frequency === "fortnightly") next = addDaysToDate(next, 14);
+            else if(bill.frequency === "fourweekly") next = addDaysToDate(next, 28);
+            else if(bill.frequency === "monthly") next = addMonthsToDate(next, 1);
+            else if(bill.frequency === "annual") next = addMonthsToDate(next, 12);
+            else break;
+          }
+
+          while(next <= endDate){
+            if(next >= startDate){
+              expanded.push({ ...bill, occurrenceDate: next, amount });
+            }
+            if(bill.frequency === "weekly") next = addDaysToDate(next, 7);
+            else if(bill.frequency === "fortnightly") next = addDaysToDate(next, 14);
+            else if(bill.frequency === "fourweekly") next = addDaysToDate(next, 28);
+            else if(bill.frequency === "monthly") next = addMonthsToDate(next, 1);
+            else if(bill.frequency === "annual") next = addMonthsToDate(next, 12);
+            else break;
+          }
+        });
+      return expanded.sort((a,b)=>(a.occurrenceDate||a.dueDate).localeCompare(b.occurrenceDate||b.dueDate));
+    }
+    function getUpcomingBills(){ const today=todayISO(), nextPay=state.nextPay||today; return getUpcomingBillsInRange(today, nextPay); }
+    function getSecondCycleBillsTotal(){
+      const today = todayISO();
+      const firstPay = state.nextPay || today;
+      const secondPay = getNextPayDateFrom(firstPay, state.payFrequency) || firstPay;
+      return getUpcomingBillsInRange(addDaysToDate(firstPay, 1), secondPay).reduce((sum,bill)=>sum + Number(bill.amount || 0),0);
+    }
+    function calculateTrueForecast(){
+      const today = todayISO();
+      let balance = Number(state.carryBalance || 0);
+      const firstPay = state.nextPay || today;
+      const secondPay = getNextPayDateFrom(firstPay, state.payFrequency) || firstPay;
+      const nextIncome = Number(state.nextPayAmount || state.expectedIncome || 0);
+      const followingIncome = Number(state.followingPayAmount || state.nextPayAmount || state.expectedIncome || 0);
+      const events = [];
+
+      if(firstPay) events.push({ type:"income", date:firstPay, amount:nextIncome });
+      if(secondPay) events.push({ type:"income", date:secondPay, amount:followingIncome });
+
+      getUpcomingBillsInRange(today, secondPay).forEach(b => {
+        events.push({ type:"bill", date:b.occurrenceDate || b.dueDate, amount:Number(b.amount || 0) });
+      });
+
+      events.sort((a,b) => {
+        if(a.date !== b.date) return a.date.localeCompare(b.date);
+        if(a.type === "income" && b.type === "bill") return -1;
+        if(a.type === "bill" && b.type === "income") return 1;
+        return 0;
+      });
+
+      events.forEach(e => {
+        if(e.type === "income") balance += e.amount;
+        else balance -= e.amount;
+      });
+
+      return balance;
+    }
     const getTotalBillsBeforeNextPay = () => getUpcomingBills().reduce((sum,bill)=>sum + Number(bill.amount || 0),0);
     const getSinkingFunds = () => (state.bills||[]).filter(b => (b.type||"due")==="sinking");
     const getFundTargetAmount = fund => Number(fund.amount || 0);
@@ -605,7 +680,7 @@ const SUPABASE_KEY = "sb_publishable_MUD1p1806N-BbidyrQsAig_BJLwwQ4U";
     function renderUpcomingBills(){
       const bills=getUpcomingBills();
       $("upcomingBillsCount").textContent=`${bills.length} bill${bills.length===1?"":"s"}`;
-      $("upcomingBillsList").innerHTML = bills.length ? bills.map(b => `<div class="item"><div class="between"><div><div><strong>${b.name || "Bill"}</strong></div><div class="small">Due Bill • ${b.frequency || "Bill"} • due ${b.dueDate}</div></div><div><strong>${money(b.amount || 0)}</strong></div></div></div>`).join("") : `<div class="small">No due bills before next pay.</div>`;
+      $("upcomingBillsList").innerHTML = bills.length ? bills.map(b => `<div class="item"><div class="between"><div><div><strong>${b.name || "Bill"}</strong></div><div class="small">Due Bill • ${b.frequency || "Bill"} • due ${b.occurrenceDate || b.dueDate}</div></div><div><strong>${money(b.amount || 0)}</strong></div></div></div>`).join("") : `<div class="small">No due bills before next pay.</div>`;
     }
     function renderSinkingFunds(){
       const funds=getSinkingFunds();
@@ -668,58 +743,16 @@ const SUPABASE_KEY = "sb_publishable_MUD1p1806N-BbidyrQsAig_BJLwwQ4U";
       $("yearSpent").textContent = money(yearSpent);
       $("yearSaved").textContent = money(yearSaved);
     }
-    function calculateTrueForecast() {
-  const today = todayISO();
-  let balance = Number(state.carryBalance || 0);
-
-  const nextPayDate = state.nextPay || today;
-
-  const events = [];
-
-  const nextIncome = Number(state.nextPayAmount || state.expectedIncome || 0);
-  const followingIncome = Number(state.followingPayAmount || nextIncome || 0);
-
-  events.push({ type: "income", date: nextPayDate, amount: nextIncome });
-
-  const secondPayDate = getNextPayDateFrom(nextPayDate, state.payFrequency);
-  events.push({ type: "income", date: secondPayDate, amount: followingIncome });
-
-  const bills = getUpcomingBills();
-
-  bills.forEach(b => {
-    events.push({
-      type: "bill",
-      date: b.occurrenceDate,
-      amount: Number(b.amount || 0)
-    });
-  });
-
-  events.sort((a, b) => {
-    if (a.date !== b.date) return a.date.localeCompare(b.date);
-
-    // 🔥 THIS FIXES YOUR ISSUE
-    if (a.type === "income") return -1;
-    if (b.type === "income") return 1;
-    return 0;
-  });
-
-  events.forEach(e => {
-    if (e.type === "income") balance += e.amount;
-    else balance -= e.amount;
-  });
-
-  return balance;
-}
     function renderHomeStats(){
       const safe=getSafeToSpendNow(), todayBudget=getTodayBudget(), spentToday=getSpentToday(), leftToday=todayBudget - spentToday;
       const goal=Number(state.savingsGoal||0), savingsBalance=Number(state.savingsBalance||0), goalPct=goal>0?Math.min((savingsBalance/goal)*100,100):0;
       const todayPct=todayBudget>0?Math.min((spentToday/todayBudget)*100,100):0, daysToPay=state.nextPay?daysBetween(todayISO(),state.nextPay):0, carry=Number(state.carryBalance||0);
-      const cautionThreshold=Math.max(50, carry*0.15), projectedSpend=getProjectedSpendToPayday(),projectedLeft = calculateTrueForecast(), score=getCurrentCycleScore(), streak=getCurrentStreak(), billsBeforeNextPay=getTotalBillsBeforeNextPay(), sinkingThisCycle=getSinkingFundPerCycleTotal();
+      const cautionThreshold=Math.max(50, carry*0.15), projectedSpend=getProjectedSpendToPayday(), projectedLeft=calculateTrueForecast(), score=getCurrentCycleScore(), streak=getCurrentStreak(), billsBeforeNextPay=getTotalBillsBeforeNextPay(), sinkingThisCycle=getSinkingFundPerCycleTotal(), nextCycleBillsTotal=getSecondCycleBillsTotal();
       $("availableNow").textContent = money(safe); $("safeToday").textContent = money(todayBudget); $("leftToday").textContent = money(leftToday);
       $("currentScore").textContent = score; $("currentStreak").textContent = streak;
       $("sumBankBalance").textContent = money(carry); $("sumLockedBills").textContent = money(billsBeforeNextPay); $("sumLockedNext").textContent = money(sinkingThisCycle); $("sumSafeSpend").textContent = money(safe);
       $("sumCarry").textContent = money(carry); $("sumExtraPay").textContent = money(Number(state.extraPayTotal||0)); $("sumNextPayAmount").textContent = money(Number(state.nextPayAmount||0)); $("sumFollowingPayAmount").textContent = money(Number(state.followingPayAmount||0));
-      $("sumNextCycleBills").textContent = money(0); $("sumSinkingFunds").textContent = money(sinkingThisCycle); $("sumSavingsTarget").textContent = money(Number(state.weeklySavingsTarget||0)); $("sumFun").textContent = money(Number(state.funTarget||0)); $("sumCurrentOnly").textContent = money(safe); $("sumForecast").textContent = money(projectedLeft);
+      $("sumNextCycleBills").textContent = money(nextCycleBillsTotal); $("sumSinkingFunds").textContent = money(sinkingThisCycle); $("sumSavingsTarget").textContent = money(Number(state.weeklySavingsTarget||0)); $("sumFun").textContent = money(Number(state.funTarget||0)); $("sumCurrentOnly").textContent = money(safe); $("sumForecast").textContent = money(projectedLeft);
       $("sumSavingsGoal").textContent = money(goal); $("sumSavingsBalance").textContent = money(savingsBalance); $("sumWeeklySavings").textContent = money(Number(state.weeklySavingsTarget||0)); $("sumRemainingGoal").textContent = money(Math.max(0, goal - savingsBalance)); $("goalProgressPill").textContent = `${Math.round(goalPct)}%`; $("goalProgressBar").style.width = `${goalPct}%`;
       if(score >= 90) $("scoreMessage").textContent = "🔥 Elite week. You're making future money decisions easier.";
       else if(score >= 80) $("scoreMessage").textContent = "🔥 Strong week. Keep protecting the basics and the wins keep stacking.";
@@ -775,9 +808,24 @@ const SUPABASE_KEY = "sb_publishable_MUD1p1806N-BbidyrQsAig_BJLwwQ4U";
     async function login(){
       const email=$("loginEmail").value.trim(), password=$("loginPassword").value;
       authStatus("Logging you in…", "sync");
-      const { error } = await sb.auth.signInWithPassword({ email, password });
+      const { data, error } = await sb.auth.signInWithPassword({ email, password });
       if(error){ authStatus(error.message, "dangerBox"); return; }
-      await checkAuth();
+      if(data?.session?.user){
+        currentUser = data.session.user;
+        await loadSubscription();
+        if(!enforceSubscriptionAccess()) return;
+        await showMembership();
+        return;
+      }
+      const { data: sessionData } = await sb.auth.getSession();
+      if(sessionData?.session?.user){
+        currentUser = sessionData.session.user;
+        await loadSubscription();
+        if(!enforceSubscriptionAccess()) return;
+        await showMembership();
+        return;
+      }
+      authStatus("Login succeeded, but no session was returned. Please refresh and try again.", "warnBox");
     }
     async function signup(){
       const email=$("signupEmail").value.trim(), password=$("signupPassword").value, name=$("signupName").value.trim();
@@ -892,26 +940,13 @@ if (!data || !data.length) {
     async function loadBudgetData(){
       if(!currentHousehold) return;
       const { data, error } = await sb.from("shared_budgets").select("*").eq("id", currentHousehold.budget_code).single();
-      if (error) {
-  console.error(error);
-  return;
-}
-
-// 🔥 ADD THIS BLOCK RIGHT HERE
-if (!data || !data.payload) return;
-
-// Prevent wiping existing data
-if (error) {
-  console.error(error);
-  return;
-}
-
-// 🔥 ADD THIS BLOCK RIGHT HERE
-if (!data || !data.payload) return;
-
-// Prevent wiping existing data
-if (Object.keys(data.payload).length === 0) return;
-      state = { ...structuredClone(defaultState), ...(data?.payload || {}) };
+      if(error){
+        console.error(error);
+        return;
+      }
+      if(!data || !data.payload) return;
+      if(Object.keys(data.payload).length === 0) return;
+      state = { ...structuredClone(defaultState), ...(data.payload || {}) };
       state.bills = (state.bills || []).map(bill => ({ type:"due", savedBalance:0, ...bill }));
       await runAutomaticRolloversIfNeeded();
       renderAll();
