@@ -799,6 +799,7 @@ async function runAutomaticRolloversIfNeeded(){
     
     
 function renderHomeStats(){
+  if (!state) return;
   const safe = getSafeToSpendNow();
   const todayBudget = getTodayBudget();
   const spentToday = getSpentToday();
@@ -925,6 +926,76 @@ function renderAuthLogo(){
 function safeCall(fn){
   try { fn && fn(); } catch(e){ console.warn("UI error:", e); }
 }
+function renderPeople(){
+  const el = $("spendPerson");
+  if(!el) return;
+
+  const people = [
+    state.person1Name || "Person 1",
+    state.person2Name || "Person 2"
+  ];
+
+  el.innerHTML = people.map(name => `<option value="${name}">${name}</option>`).join("");
+}
+function safeCall(fn){
+  try {
+    if (typeof fn === "function") fn();
+  } catch (e) {
+    console.warn("UI render error:", e);
+  }
+}
+function renderLogo(){
+  const box = $("logoBox");
+  if(!box) return;
+
+  box.innerHTML = state.logo
+    ? `<img src="${state.logo}" alt="logo">`
+    : `<img src="icon-192.png" alt="logo">`;
+}
+
+function renderAuthLogo(){
+  const box = $("authLogoBox");
+  if(!box) return;
+
+  box.innerHTML = state.logo
+    ? `<img src="${state.logo}" alt="logo">`
+    : `<img src="icon-192.png" alt="logo">`;
+}
+
+function renderMembership(){
+  if(!currentHousehold) return;
+
+  if($("budgetIdInput")) $("budgetIdInput").value = currentHousehold.budget_code || "";
+  if($("inviteCodeInput")) $("inviteCodeInput").value = currentHousehold.invite_code || "";
+
+  const box = $("memberBox");
+  if(box){
+    box.textContent = currentHousehold.mode === "shared"
+      ? "Shared budget connected"
+      : "Solo budget connected";
+  }
+}
+
+function renderPeople(){
+  const el = $("spendPerson");
+  if(!el) return;
+
+  const people = [
+    state.person1Name || "Person 1",
+    state.person2Name || "Person 2"
+  ];
+
+  el.innerHTML = people.map(name =>
+    `<option value="${name}">${name}</option>`
+  ).join("");
+}
+function safeCall(fn){
+  try {
+    if (typeof fn === "function") fn();
+  } catch (e) {
+    console.warn("Render error:", e);
+  }
+}
 
 function renderAll(){
   safeCall(renderLogo);
@@ -979,57 +1050,32 @@ async function checkAuth() {
 }
 
 async function login(){
+  const email = $("loginEmail").value.trim();
+  const password = $("loginPassword").value;
+
+  authStatus("Logging you in…", "sync");
+
   try {
-    const email = $("loginEmail").value.trim();
-    const password = $("loginPassword").value;
-
-    if (!email || !password) {
-      authStatus("Enter your email and password.", "warnBox");
-      return;
-    }
-
-    authStatus("Logging you in…", "sync");
-
-    const signInResult = await Promise.race([
+    const result = await Promise.race([
       sb.auth.signInWithPassword({ email, password }),
       new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Login timed out")), 10000)
+        setTimeout(() => reject(new Error("Login timeout")), 5000)
       )
     ]);
 
-    const { data, error } = signInResult;
+    if (result.error) throw result.error;
 
-    if (error) {
-      authStatus(error.message || "Login failed.", "dangerBox");
-      return;
-    }
+    currentUser = result.data.user;
 
-    const user = data?.session?.user || data?.user;
+    await loadSubscription();
 
-    if (!user) {
-      authStatus("Login succeeded, but no user session was returned.", "warnBox");
-      return;
-    }
+    if (!enforceSubscriptionAccess()) return;
 
-    currentUser = user;
-
-    authStatus("Loading your budget…", "sync");
-
-    await Promise.race([
-      showMembership(),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Membership lookup timed out")), 10000)
-      )
-    ]);
+    await showMembership();
 
   } catch (err) {
-    console.error("login failed", err);
-    authStatus(err.message || "Login failed. Please try again.", "dangerBox");
-    showAuth();
-    $("authForms").classList.remove("hidden");
-    $("membershipPanel").classList.add("hidden");
-    $("loginPanel").classList.remove("hidden");
-    $("signupPanel").classList.add("hidden");
+    console.error(err);
+    authStatus("Login failed. Try again.", "dangerBox");
   }
 }
     async function signup(){
