@@ -528,19 +528,17 @@ const SUPABASE_KEY = "sb_publishable_MUD1p1806N-BbidyrQsAig_BJLwwQ4U";
     function getBillFrequencyPerYear(frequency){ if(frequency==="weekly") return 52; if(frequency==="fortnightly") return 26; if(frequency==="fourweekly") return 13; if(frequency==="monthly") return 12; if(frequency==="annual") return 1; return 0; }
     function getUpcomingBillsInRange(startDate, endDate){
       const expanded = [];
-      (state.bills||[])
-        .filter(b => (b.type||"due")==="due")
-        .filter(b => b && b.dueDate && b.amount!=="")
+      (state.bills || [])
+        .filter(b => (b.type || "due") === "due")
+        .filter(b => b && b.dueDate && b.amount !== "")
         .forEach(bill => {
           const amount = Number(bill.amount || 0);
           let next = bill.dueDate;
 
           if(!bill.frequency || bill.frequency === "once"){
-  if(next >= startDate && next < endDate){
-    expanded.push({ ...bill, occurrenceDate: next, amount });
-  }
-  return;
-}
+            if(next >= startDate && next < endDate){
+              expanded.push({ ...bill, occurrenceDate: next, amount });
+            }
             return;
           }
 
@@ -950,6 +948,7 @@ if (!data || !data.length) {
       }
       if(!data || !data.payload) return;
       if(Object.keys(data.payload).length === 0) return;
+
       state = { ...structuredClone(defaultState), ...(data.payload || {}) };
       state.bills = (state.bills || []).map(bill => ({ type:"due", savedBalance:0, ...bill }));
       await runAutomaticRolloversIfNeeded();
