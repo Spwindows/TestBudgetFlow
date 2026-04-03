@@ -951,68 +951,59 @@ async function checkAuth() {
 }
 
 async function login(){
-      try {
-        const email = $("loginEmail").value.trim();
-        const password = $("loginPassword").value;
+  try {
+    const email = $("loginEmail").value.trim();
+    const password = $("loginPassword").value;
 
-        authStatus("Logging you in…", "sync");
-
-        const result = await Promise.race([
-          sb.auth.signInWithPassword({ email, password }),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error("Login timed out")), 8000)
-          )
-        ]);
-
-        const { data, error } = result || {};
-        if (error) {
-          authStatus(error.message || "Login failed.", "dangerBox");
-          return;
-        }
-
-        const user = data?.session?.user || data?.user || null;
-        if (user) {
-          currentUser = user;
-          await loadSubscription();
-          if (!enforceSubscriptionAccess()) return;
-
-          await Promise.race([
-            showMembership(),
-            new Promise((_, reject) =>
-              setTimeout(() => reject(new Error("Membership lookup timed out")), 8000)
-            )
-          ]);
-          return;
-        }
-
-        const sessionResult = await Promise.race([
-          sb.auth.getSession(),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error("Session read timed out")), 4000)
-          )
-        ]);
-
-        const sessionUser = sessionResult?.data?.session?.user || null;
-        if (sessionUser) {
-          currentUser = sessionUser;
-          await loadSubscription();
-          if (!enforceSubscriptionAccess()) return;
-
-          await Promise.race([
-            showMembership(),
-            new Promise((_, reject) =>
-              setTimeout(() => reject(new Error("Membership lookup timed out")), 8000)
-            )
-          ]);
-          return;
-        }
-
-        authStatus("Login succeeded, but no session was returned. Please refresh and try again.", "warnBox");
-      } catch (err) {
-        console.error("login failed", err);
-        failOpenToAuth("Login failed. Please try again.", "warnBox");
-      }
+    if (!email || !password) {
+      authStatus("Enter your email and password.", "warnBox");
+      return;
     }
+
+    authStatus("Logging you in…", "sync");
+
+    const signInResult = await Promise.race([
+      sb.auth.signInWithPassword({ email, password }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Login timed out")), 10000)
+      )
+    ]);
+
+    const { data, error } = signInResult;
+
+    if (error) {
+      authStatus(error.message || "Login failed.", "dangerBox");
+      return;
+    }
+
+    const user = data?.session?.user || data?.user;
+
+    if (!user) {
+      authStatus("Login succeeded, but no user session was returned.", "warnBox");
+      return;
+    }
+
+    currentUser = user;
+
+    authStatus("Loading your budget…", "sync");
+
+    await Promise.race([
+      showMembership(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Membership lookup timed out")), 10000)
+      )
+    ]);
+
+  } catch (err) {
+    console.error("login failed", err);
+    authStatus(err.message || "Login failed. Please try again.", "dangerBox");
+    showAuth();
+    $("authForms").classList.remove("hidden");
+    $("membershipPanel").classList.add("hidden");
+    $("loginPanel").classList.remove("hidden");
+    $("signupPanel").classList.add("hidden");
+  }
+}
     async function signup(){
       const email=$("signupEmail").value.trim(), password=$("signupPassword").value, name=$("signupName").value.trim();
       authStatus("Creating your account…", "sync");
@@ -1028,51 +1019,52 @@ async function login(){
       $("loginEmail").value = email; $("loginPassword").value = ""; $("loginPanel").classList.remove("hidden"); $("signupPanel").classList.add("hidden");
     }
     async function logout(){ await sb.auth.signOut(); location.href = location.pathname; }
-    async function showMembership() {
+async function showMembership() {
   await loadSubscription();
+
   const { data, error } = await sb
     .from("household_members")
     .select("household_id, role, households(*)")
     .eq("user_id", currentUser.id);
 
-  if (error) return alert(error.message);
+  if (error) {
+    console.error("showMembership error", error);
+    authStatus(error.message || "Could not load your membership.", "dangerBox");
+    showAuth();
+    return;
+  }
 
   const pendingInvite = loadPendingInviteCode();
 
-if (!data || !data.length) {
-
-  if (pendingInvite) {
-    try {
-      console.log("Auto joining with invite:", pendingInvite);
-
-      $("joinInviteCode").value = pendingInvite;
-
-      await joinSharedHousehold();
-
-      localStorage.removeItem("pendingInviteCode");
-      return;
-
-    } catch (err) {
-      console.error("Auto join failed:", err);
-      authStatus("Invite found but join failed. Tap join below.", "warnBox");
+  if (!data || !data.length) {
+    if (pendingInvite) {
+      try {
+        $("joinInviteCode").value = pendingInvite;
+        await joinSharedHousehold();
+        localStorage.removeItem("pendingInviteCode");
+        return;
+      } catch (err) {
+        console.error("Auto join failed:", err);
+        authStatus("Invite found but join failed. Tap Join Shared Budget.", "warnBox");
+      }
     }
+
+    $("authForms").classList.add("hidden");
+    $("membershipPanel").classList.remove("hidden");
+
+    if (pendingInvite) {
+      $("sharedJoinPanel").classList.remove("hidden");
+      $("joinInviteCode").value = pendingInvite;
+      authStatus("You're almost in. Just tap Join Shared Budget.", "ok");
+    } else {
+      authStatus("Account ready. Choose solo or shared.", "ok");
+    }
+
+    showAuth();
+    return;
   }
 
-  $("authForms").classList.add("hidden");
-  $("membershipPanel").classList.remove("hidden");
-
-  if (pendingInvite) {
-    $("sharedJoinPanel").classList.remove("hidden");
-    $("joinInviteCode").value = pendingInvite;
-    authStatus("You're almost in. Just tap Join Shared Budget.", "ok");
-  } else {
-    authStatus("Account ready. Choose solo or shared.", "ok");
-  }
-
-  showAuth();
-  return;
-}
-    currentHousehold = data[0].households;
+  currentHousehold = data[0].households;
   await loadBudgetData();
   showApp();
 }
