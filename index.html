@@ -1023,32 +1023,43 @@ function failOpenToAuth(msg, cls="warnBox"){
 
 async function checkAuth() {
   try {
-    authStatus("Checking session…", "sync");
+    authStatus("Checking session...", "sync");
 
-    const result = await Promise.race([
+    const sessionResult = await Promise.race([
       sb.auth.getSession(),
       new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Session check timed out")), 4000)
+        setTimeout(() => reject(new Error("Session check timeout")), 4000)
       )
     ]);
 
-    const session = result?.data?.session || null;
+    const session = sessionResult?.data?.session || null;
 
     if (session?.user) {
       currentUser = session.user;
       await loadSubscription();
-      if(!enforceSubscriptionAccess()) return;
+
+      if (!enforceSubscriptionAccess()) return;
       await showMembership();
       return;
     }
 
-    failOpenToAuth("Log in to continue.", "sync");
+    showAuth();
+    $("authForms").classList.remove("hidden");
+    $("membershipPanel").classList.add("hidden");
+    $("loginPanel").classList.remove("hidden");
+    $("signupPanel").classList.add("hidden");
+    authStatus("Log in to continue.", "sync");
+
   } catch (err) {
-    console.error("checkAuth failed", err);
-    failOpenToAuth("Log in to continue.");
+    console.error("checkAuth error:", err);
+    showAuth();
+    $("authForms").classList.remove("hidden");
+    $("membershipPanel").classList.add("hidden");
+    $("loginPanel").classList.remove("hidden");
+    $("signupPanel").classList.add("hidden");
+    authStatus("Log in to continue.", "warnBox");
   }
 }
-
 async function handleLogin() {
   const email = $("loginEmail").value.trim();
   const password = $("loginPassword").value;
@@ -1056,38 +1067,17 @@ async function handleLogin() {
   authStatus("Logging in...", "sync");
 
   try {
-    const { data, error } = await sb.auth.signInWithPassword({
-      email,
-      password
-    });
-
-    if (error) {
-      console.error("LOGIN ERROR:", error);
-
-      if (error.message.includes("Invalid login credentials")) {
-        authStatus("Wrong email or password", "dangerBox");
-      } else if (error.message.includes("Email not confirmed")) {
-        authStatus("Check your email to confirm your account", "warnBox");
-      } else {
-        authStatus(error.message, "dangerBox");
-      }
-
-      return;
-    }
-
-    // SUCCESS
-    currentUser = data.user;
-    authStatus("Success!", "successBox");
-
-    await loadSubscription();
-    if (!enforceSubscriptionAccess()) return;
-
-    await showMembership();
-
-  } catch (err) {
-    console.error("CRASH:", err);
-    authStatus("Something broke. Check console.", "dangerBox");
-  }
+  bindSettings();
+  handleInviteFromUrl();
+  checkAuth();
+} catch (err) {
+  console.error("startup failed:", err);
+  showAuth();
+  $("authForms").classList.remove("hidden");
+  $("membershipPanel").classList.add("hidden");
+  $("loginPanel").classList.remove("hidden");
+  $("signupPanel").classList.add("hidden");
+  authStatus("App failed to start. Refresh and try again.", "dangerBox");
 }
     async function signup(){
       const email=$("signupEmail").value.trim(), password=$("signupPassword").value, name=$("signupName").value.trim();
@@ -1348,7 +1338,7 @@ async function addBill(){ state.bills.push({ name:"", amount:"", frequency:"mont
     $("showSignupBtn").onclick = () => { $("signupPanel").classList.remove("hidden"); $("loginPanel").classList.add("hidden"); };
     $("goSignupInline").onclick = () => { $("signupPanel").classList.remove("hidden"); $("loginPanel").classList.add("hidden"); };
     $("goLoginInline").onclick = () => { $("loginPanel").classList.remove("hidden"); $("signupPanel").classList.add("hidden"); };
-    $("loginBtn").onclick = login; $("signupBtn").onclick = signup; $("logoutBtn").onclick = logout;
+    $("loginBtn").onclick = handleLogin; $("signupBtn").onclick = signup; $("logoutBtn").onclick = logout;
     $("createSoloHouseholdBtn").onclick = () => createHousehold("solo"); $("createSharedHouseholdBtn").onclick = () => createHousehold("shared"); $("showSharedJoinBtn").onclick = () => $("sharedJoinPanel").classList.toggle("hidden"); $("joinInviteBtn").onclick = joinSharedHousehold;
     document.querySelectorAll(".tab").forEach(tab => tab.addEventListener("click", () => switchPage(tab.dataset.page)));
     document.querySelectorAll(".quickAddBtn").forEach(btn => btn.addEventListener("click", () => { $("spendName").value = btn.dataset.name || ""; $("spendCategory").value = btn.dataset.category || "General"; switchPage("spends"); }));
