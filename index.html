@@ -1064,22 +1064,54 @@ async function handleLogin() {
   const email = $("loginEmail").value.trim();
   const password = $("loginPassword").value;
 
+  if (!email || !password) {
+    authStatus("Enter your email and password.", "warnBox");
+    return;
+  }
+
   authStatus("Logging in...", "sync");
 
   try {
-  bindSettings();
-  handleInviteFromUrl();
-  checkAuth();
-} catch (err) {
-  console.error("startup failed:", err);
-  showAuth();
-  $("authForms").classList.remove("hidden");
-  $("membershipPanel").classList.add("hidden");
-  $("loginPanel").classList.remove("hidden");
-  $("signupPanel").classList.add("hidden");
-  authStatus("App failed to start. Refresh and try again.", "dangerBox");
+    const { data, error } = await Promise.race([
+      sb.auth.signInWithPassword({ email, password }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Login timeout")), 8000)
+      )
+    ]);
+
+    if (error) {
+      console.error("LOGIN ERROR:", error);
+      authStatus(error.message || "Login failed. Try again.", "dangerBox");
+      return;
+    }
+
+    const user = data?.session?.user || data?.user;
+
+    if (!user) {
+      authStatus("Login succeeded but no user session was returned.", "warnBox");
+      return;
+    }
+
+    currentUser = user;
+
+    await loadSubscription();
+
+    if (!enforceSubscriptionAccess()) return;
+
+    await showMembership();
+  } catch (err) {
+    console.error("LOGIN CRASH:", err);
+    authStatus(err.message || "Login failed. Try again.", "dangerBox");
+    showAuth();
+    $("authForms").classList.remove("hidden");
+    $("membershipPanel").classList.add("hidden");
+    $("loginPanel").classList.remove("hidden");
+    $("signupPanel").classList.add("hidden");
+  }
 }
     async function signup(){
+  ...
+}
       const email=$("signupEmail").value.trim(), password=$("signupPassword").value, name=$("signupName").value.trim();
       authStatus("Creating your account…", "sync");
       const { data, error } = await sb.auth.signUp({ email, password, options: { emailRedirectTo: "https://budgetannspendapp.netlify.app/", data: { full_name: name } } });
