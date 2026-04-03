@@ -1049,33 +1049,44 @@ async function checkAuth() {
   }
 }
 
-async function login(){
+async function handleLogin() {
   const email = $("loginEmail").value.trim();
   const password = $("loginPassword").value;
 
-  authStatus("Logging you in…", "sync");
+  authStatus("Logging in...", "sync");
 
   try {
-    const result = await Promise.race([
-      sb.auth.signInWithPassword({ email, password }),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Login timeout")), 5000)
-      )
-    ]);
+    const { data, error } = await sb.auth.signInWithPassword({
+      email,
+      password
+    });
 
-    if (result.error) throw result.error;
+    if (error) {
+      console.error("LOGIN ERROR:", error);
 
-    currentUser = result.data.user;
+      if (error.message.includes("Invalid login credentials")) {
+        authStatus("Wrong email or password", "dangerBox");
+      } else if (error.message.includes("Email not confirmed")) {
+        authStatus("Check your email to confirm your account", "warnBox");
+      } else {
+        authStatus(error.message, "dangerBox");
+      }
+
+      return;
+    }
+
+    // SUCCESS
+    currentUser = data.user;
+    authStatus("Success!", "successBox");
 
     await loadSubscription();
-
     if (!enforceSubscriptionAccess()) return;
 
     await showMembership();
 
   } catch (err) {
-    console.error(err);
-    authStatus("Login failed. Try again.", "dangerBox");
+    console.error("CRASH:", err);
+    authStatus("Something broke. Check console.", "dangerBox");
   }
 }
     async function signup(){
