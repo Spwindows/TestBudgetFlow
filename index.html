@@ -913,20 +913,32 @@ function renderAuthLogo(){
   box.innerHTML = (state.logo && String(state.logo).trim() !== "")
     ? `<img src="${state.logo}" alt="BudgetFlow logo">`
     : `<img src="icon-192.png" alt="BudgetFlow logo">`;
+}function renderMembership(){
+  if (!$("budgetIdInput") || !$("inviteCodeInput") || !$("memberBox")) return;
+
+  $("budgetIdInput").value = currentHousehold?.budget_code || "";
+  $("inviteCodeInput").value = currentHousehold?.invite_code || "";
+
+  const mode = currentHousehold?.mode === "shared" ? "Shared" : "Solo";
+  $("memberBox").textContent = mode + " budget connected";
 }
+function safeCall(fn){
+  try { fn && fn(); } catch(e){ console.warn("UI error:", e); }
+}
+
 function renderAll(){
-  renderLogo();
-  renderAuthLogo();
-  renderMembership();
-  renderPlanBox();
-  renderPeople();
-  renderFormValues();
-  renderHomeStats();
-  renderUpcomingBills();
-  renderSinkingFunds();
-  renderSpends();
-  renderBills();
-  renderHistory();
+  safeCall(renderLogo);
+  safeCall(renderAuthLogo);
+  safeCall(renderMembership);
+  safeCall(renderPlanBox);
+  safeCall(renderPeople);
+  safeCall(renderFormValues);
+  safeCall(renderHomeStats);
+  safeCall(renderUpcomingBills);
+  safeCall(renderSinkingFunds);
+  safeCall(renderSpends);
+  safeCall(renderBills);
+  safeCall(renderHistory);
 }
 
 function failOpenToAuth(msg, cls="warnBox"){
