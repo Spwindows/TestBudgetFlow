@@ -375,7 +375,7 @@
   <script>
    const SUPABASE_URL = "https://ivokcqkwpzxmalugyakv.supabase.co";
 const SUPABASE_KEY = "sb_publishable_MUD1p1806N-BbidyrQsAig_BJLwwQ4U";
-    const sb = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
+    const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
     const defaultState = {
       appName: "BudgetFlow", logo: "", person1Name: "Person 1", person2Name: "Person 2",
@@ -406,8 +406,7 @@ const SUPABASE_KEY = "sb_publishable_MUD1p1806N-BbidyrQsAig_BJLwwQ4U";
     function markEditingOff(){ clearTimeout(editReleaseTimer); editReleaseTimer = setTimeout(() => { isEditing = false; }, 600); }
     function showAuth(){ $("authRoot").classList.remove("hidden"); $("appRoot").classList.add("hidden"); }
     function showApp(){ $("authRoot").classList.add("hidden"); $("appRoot").classList.remove("hidden"); }
-    function authStatus(msg, cls="sync"){ const el = $("authStatus"); if(!el) return; el.className = "notice " + cls; el.textContent = msg; }
-    function failOpenToAuth(msg){ try { showAuth(); } catch(e) {} try { authStatus(msg || "Something went wrong loading the app. Please refresh.", "dangerBox"); } catch(e) {} }
+    function authStatus(msg, cls="sync"){ const el = $("authStatus"); el.className = "notice " + cls; el.textContent = msg; }
     const getPeople = () => [state.person1Name || "Person 1", state.person2Name || "Person 2"];
     const getInviteLink = () => currentHousehold?.invite_code ? `${location.origin}${location.pathname}?invite=${currentHousehold.invite_code}` : "";
 
@@ -564,14 +563,18 @@ const SUPABASE_KEY = "sb_publishable_MUD1p1806N-BbidyrQsAig_BJLwwQ4U";
             else break;
           }
         });
-      return expanded.sort((a,b)=>(a.occurrenceDate||a.dueDate).localeCompare(b.occurrenceDate||b.dueDate));
+      return expanded.sort((a,b)=>(a.occurrenceDate || a.dueDate).localeCompare(b.occurrenceDate || b.dueDate));
     }
-    function getUpcomingBills(){ const today=todayISO(), nextPay=state.nextPay||today; return getUpcomingBillsInRange(today, nextPay); }
+    function getUpcomingBills(){
+      const today = todayISO();
+      const nextPay = state.nextPay || today;
+      return getUpcomingBillsInRange(today, nextPay);
+    }
     function getSecondCycleBillsTotal(){
       const today = todayISO();
       const firstPay = state.nextPay || today;
       const secondPay = getNextPayDateFrom(firstPay, state.payFrequency) || firstPay;
-      return getUpcomingBillsInRange(addDaysToDate(firstPay, 1), secondPay).reduce((sum,bill)=>sum + Number(bill.amount || 0),0);
+      return getUpcomingBillsInRange(addDaysToDate(firstPay, 1), secondPay).reduce((sum, bill) => sum + Number(bill.amount || 0), 0);
     }
     function calculateTrueForecast(){
       const today = todayISO();
@@ -627,9 +630,13 @@ const SUPABASE_KEY = "sb_publishable_MUD1p1806N-BbidyrQsAig_BJLwwQ4U";
     const getSinkingFundPerCycleTotal = () => getSinkingFunds().reduce((sum,fund)=>sum + getFundPerCycleContribution(fund),0);
     function getSpentThisCycle(){ const today=todayISO(), lastPay=state.lastPay||""; return (state.spends||[]).filter(s => s.date && (!lastPay || s.date>=lastPay) && s.date<=today).reduce((sum,s)=>sum + Number(s.amount || 0),0); }
     const getSpentToday = () => (state.spends||[]).filter(s => s.date===todayISO()).reduce((sum,s)=>sum + Number(s.amount || 0),0);
-    function getSafeToSpendNow() {
-  return calculateTrueForecast();
-}{ const carry=Number(state.carryBalance||0), dueBills=getTotalBillsBeforeNextPay(), sinkingFunds=getSinkingFundPerCycleTotal(), savings=Number(state.weeklySavingsTarget||0); return carry - dueBills - sinkingFunds - savings; }
+    function getSafeToSpendNow(){
+      const carry = Number(state.carryBalance || 0);
+      const dueBills = getTotalBillsBeforeNextPay();
+      const sinkingFunds = getSinkingFundPerCycleTotal();
+      const savings = Number(state.weeklySavingsTarget || 0);
+      return carry - dueBills - sinkingFunds - savings;
+    }
     const getDaysIntoCycle = () => !state.lastPay ? 1 : Math.max(1, daysBetween(state.lastPay, todayISO()) + 1);
     const getAverageDailySpend = () => getSpentThisCycle() / getDaysIntoCycle();
     const getProjectedSpendToPayday = () => (state.nextPay ? daysBetween(todayISO(), state.nextPay) : 0) * getAverageDailySpend();
@@ -790,58 +797,66 @@ const SUPABASE_KEY = "sb_publishable_MUD1p1806N-BbidyrQsAig_BJLwwQ4U";
     function renderAll(){ renderLogo(); renderAuthLogo(); renderMembership(); renderPlanBox(); renderPeople(); renderFormValues(); renderHomeStats(); renderUpcomingBills(); renderSinkingFunds(); renderSpends(); renderBills(); renderHistory(); }
 
     async function checkAuth() {
-  try {
-    if(!sb){
-      failOpenToAuth("Supabase failed to load. Refresh and try again.");
-      return;
-    }
-    const { data: { session } } = await sb.auth.getSession();
-
-    if (session?.user) {
-      currentUser = session.user;
-      await loadSubscription();
-      const pendingInvite = localStorage.getItem("pendingInviteCode");
-      if (pendingInvite) console.log("Invite detected on login:", pendingInvite);
-      if(!enforceSubscriptionAccess()) return;
-      await showMembership();
-    } else {
-      showAuth();
-      authStatus("Log in to continue.", "sync");
-    }
-  } catch (err) {
-    console.error("checkAuth failed", err);
-    failOpenToAuth("Could not start the app. Please refresh and try again.");
-  }
-}
-    async function login(){
       try {
-        if(!sb){ failOpenToAuth("Supabase failed to load. Refresh and try again."); return; }
-        const email=$("loginEmail").value.trim(), password=$("loginPassword").value;
-        authStatus("Logging you in…", "sync");
-        const { data, error } = await sb.auth.signInWithPassword({ email, password });
-        if(error){ authStatus(error.message, "dangerBox"); return; }
-        const user = data?.session?.user || data?.user;
-        if(user){
-          currentUser = user;
+        if(!sb){
+          failOpenToAuth("Supabase failed to load. Refresh and try again.");
+          return;
+        }
+
+        authStatus("Checking session…", "sync");
+
+        const result = await Promise.race([
+          sb.auth.getSession(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("Session check timed out")), 4000))
+        ]);
+
+        const session = result?.data?.session || null;
+
+        if (session?.user) {
+          currentUser = session.user;
           await loadSubscription();
           if(!enforceSubscriptionAccess()) return;
           await showMembership();
           return;
         }
-        const { data: sessionData } = await sb.auth.getSession();
-        if(sessionData?.session?.user){
-          currentUser = sessionData.session.user;
-          await loadSubscription();
-          if(!enforceSubscriptionAccess()) return;
-          await showMembership();
-          return;
-        }
-        authStatus("Login succeeded, but no session was returned. Please refresh and try again.", "warnBox");
-      } catch (err) {
-        console.error("login failed", err);
-        authStatus("Login failed. Please refresh and try again.", "dangerBox");
+
         showAuth();
+        $("authForms").classList.remove("hidden");
+        $("membershipPanel").classList.add("hidden");
+        $("loginPanel").classList.remove("hidden");
+        $("signupPanel").classList.add("hidden");
+        authStatus("Log in to continue.", "sync");
+      } catch (err) {
+        console.error("checkAuth failed", err);
+        showAuth();
+        $("authForms").classList.remove("hidden");
+        $("membershipPanel").classList.add("hidden");
+        $("loginPanel").classList.remove("hidden");
+        $("signupPanel").classList.add("hidden");
+        authStatus("Log in to continue.", "warnBox");
       }
+    }
+    async function login(){
+      const email=$("loginEmail").value.trim(), password=$("loginPassword").value;
+      authStatus("Logging you in…", "sync");
+      const { data, error } = await sb.auth.signInWithPassword({ email, password });
+      if(error){ authStatus(error.message, "dangerBox"); return; }
+      if(data?.session?.user){
+        currentUser = data.session.user;
+        await loadSubscription();
+        if(!enforceSubscriptionAccess()) return;
+        await showMembership();
+        return;
+      }
+      const { data: sessionData } = await sb.auth.getSession();
+      if(sessionData?.session?.user){
+        currentUser = sessionData.session.user;
+        await loadSubscription();
+        if(!enforceSubscriptionAccess()) return;
+        await showMembership();
+        return;
+      }
+      authStatus("Login succeeded, but no session was returned. Please refresh and try again.", "warnBox");
     }
     async function signup(){
       const email=$("signupEmail").value.trim(), password=$("signupPassword").value, name=$("signupName").value.trim();
@@ -853,7 +868,7 @@ const SUPABASE_KEY = "sb_publishable_MUD1p1806N-BbidyrQsAig_BJLwwQ4U";
       }
       if(data.session?.user){ currentUser=data.session.user; await loadSubscription(); authStatus("Account created. Signing you in…", "ok"); if(!enforceSubscriptionAccess()) return; await showMembership(); return; }
       const signInAttempt = await sb.auth.signInWithPassword({ email, password });
-      if(!signInAttempt.error){ currentUser = signInAttempt.data.user; await loadSubscription(); authStatus("Account created and signed in.", "ok"); if(!enforceSubscriptionAccess()) return; await showMembership(); return; }
+      if(!signInAttempt.error){ currentUser = signInAttempt.data?.session?.user || signInAttempt.data?.user; await loadSubscription(); authStatus("Account created and signed in.", "ok"); if(!enforceSubscriptionAccess()) return; await showMembership(); return; }
       authStatus("Account created. Check your email to confirm, then come back and log in.", "ok");
       $("loginEmail").value = email; $("loginPassword").value = ""; $("loginPanel").classList.remove("hidden"); $("signupPanel").classList.add("hidden");
     }
@@ -962,7 +977,6 @@ if (!data || !data.length) {
       }
       if(!data || !data.payload) return;
       if(Object.keys(data.payload).length === 0) return;
-
       state = { ...structuredClone(defaultState), ...(data.payload || {}) };
       state.bills = (state.bills || []).map(bill => ({ type:"due", savedBalance:0, ...bill }));
       await runAutomaticRolloversIfNeeded();
@@ -1074,30 +1088,35 @@ if (!data || !data.length) {
     document.addEventListener("focusin", e => { if(e.target.matches("input, select, textarea")) markEditingOn(); });
     document.addEventListener("focusout", e => { if(e.target.matches("input, select, textarea")) markEditingOff(); });
 
-    window.addEventListener("error", (e) => {
-      console.error("window error", e.error || e.message);
-      failOpenToAuth("The app hit an error while loading. Please refresh.");
-    });
-    window.addEventListener("unhandledrejection", (e) => {
-      console.error("promise rejection", e.reason);
-      failOpenToAuth("The app hit an error while loading. Please refresh.");
-    });
-
     try {
-      bindSettings();
-      handleInviteFromUrl();
-      checkAuth();
-    } catch (err) {
-      console.error("startup failed", err);
-      failOpenToAuth("The app could not start. Please refresh.");
-    }
+  bindSettings();
+  handleInviteFromUrl();
+  checkAuth().catch(err => {
+    console.error("checkAuth failed", err);
+    showAuth();
+    $("authForms").classList.remove("hidden");
+    $("membershipPanel").classList.add("hidden");
+    $("loginPanel").classList.remove("hidden");
+    $("signupPanel").classList.add("hidden");
+    authStatus("Log in to continue.", "warnBox");
+  });
+} catch (err) {
+  console.error("startup failed", err);
+  showAuth();
+  $("authForms").classList.remove("hidden");
+  $("membershipPanel").classList.add("hidden");
+  $("loginPanel").classList.remove("hidden");
+  $("signupPanel").classList.add("hidden");
+  authStatus("The app hit an error while loading. Please refresh.", "dangerBox");
+}
 
     setInterval(() => {
-      if (!currentHousehold) return;
-      if (isEditing) return;
-      if (Date.now() - lastSaveTime < 3000) return;
-      loadBudgetData().catch(err => console.error("background sync failed", err));
-    }, 4000);
+  if (!currentHousehold) return;
+  if (isEditing) return;
+  if (Date.now() - lastSaveTime < 3000) return;
+
+  loadBudgetData();
+}, 4000);
   </script>
 </body>
 </html>
