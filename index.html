@@ -668,11 +668,53 @@ const SUPABASE_KEY = "sb_publishable_MUD1p1806N-BbidyrQsAig_BJLwwQ4U";
       $("yearSpent").textContent = money(yearSpent);
       $("yearSaved").textContent = money(yearSaved);
     }
+    function calculateTrueForecast() {
+  const today = todayISO();
+  let balance = Number(state.carryBalance || 0);
+
+  const nextPayDate = state.nextPay || today;
+
+  const events = [];
+
+  const nextIncome = Number(state.nextPayAmount || state.expectedIncome || 0);
+  const followingIncome = Number(state.followingPayAmount || nextIncome || 0);
+
+  events.push({ type: "income", date: nextPayDate, amount: nextIncome });
+
+  const secondPayDate = getNextPayDateFrom(nextPayDate, state.payFrequency);
+  events.push({ type: "income", date: secondPayDate, amount: followingIncome });
+
+  const bills = getUpcomingBills();
+
+  bills.forEach(b => {
+    events.push({
+      type: "bill",
+      date: b.occurrenceDate,
+      amount: Number(b.amount || 0)
+    });
+  });
+
+  events.sort((a, b) => {
+    if (a.date !== b.date) return a.date.localeCompare(b.date);
+
+    // 🔥 THIS FIXES YOUR ISSUE
+    if (a.type === "income") return -1;
+    if (b.type === "income") return 1;
+    return 0;
+  });
+
+  events.forEach(e => {
+    if (e.type === "income") balance += e.amount;
+    else balance -= e.amount;
+  });
+
+  return balance;
+}
     function renderHomeStats(){
       const safe=getSafeToSpendNow(), todayBudget=getTodayBudget(), spentToday=getSpentToday(), leftToday=todayBudget - spentToday;
       const goal=Number(state.savingsGoal||0), savingsBalance=Number(state.savingsBalance||0), goalPct=goal>0?Math.min((savingsBalance/goal)*100,100):0;
       const todayPct=todayBudget>0?Math.min((spentToday/todayBudget)*100,100):0, daysToPay=state.nextPay?daysBetween(todayISO(),state.nextPay):0, carry=Number(state.carryBalance||0);
-      const cautionThreshold=Math.max(50, carry*0.15), projectedSpend=getProjectedSpendToPayday(), projectedLeft=getProjectedLeftByPayday(), score=getCurrentCycleScore(), streak=getCurrentStreak(), billsBeforeNextPay=getTotalBillsBeforeNextPay(), sinkingThisCycle=getSinkingFundPerCycleTotal();
+      const cautionThreshold=Math.max(50, carry*0.15), projectedSpend=getProjectedSpendToPayday(),projectedLeft = calculateTrueForecast(), score=getCurrentCycleScore(), streak=getCurrentStreak(), billsBeforeNextPay=getTotalBillsBeforeNextPay(), sinkingThisCycle=getSinkingFundPerCycleTotal();
       $("availableNow").textContent = money(safe); $("safeToday").textContent = money(todayBudget); $("leftToday").textContent = money(leftToday);
       $("currentScore").textContent = score; $("currentStreak").textContent = streak;
       $("sumBankBalance").textContent = money(carry); $("sumLockedBills").textContent = money(billsBeforeNextPay); $("sumLockedNext").textContent = money(sinkingThisCycle); $("sumSafeSpend").textContent = money(safe);
