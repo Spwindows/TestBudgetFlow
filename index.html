@@ -536,9 +536,11 @@ const SUPABASE_KEY = "sb_publishable_MUD1p1806N-BbidyrQsAig_BJLwwQ4U";
           let next = bill.dueDate;
 
           if(!bill.frequency || bill.frequency === "once"){
-            if(next >= startDate && next <= endDate){
-              expanded.push({ ...bill, occurrenceDate: next, amount });
-            }
+  if(next >= startDate && next < endDate){
+    expanded.push({ ...bill, occurrenceDate: next, amount });
+  }
+  return;
+}
             return;
           }
 
@@ -551,7 +553,7 @@ const SUPABASE_KEY = "sb_publishable_MUD1p1806N-BbidyrQsAig_BJLwwQ4U";
             else break;
           }
 
-          while(next <= endDate){
+          while(next < endDate){
             if(next >= startDate){
               expanded.push({ ...bill, occurrenceDate: next, amount });
             }
@@ -626,7 +628,9 @@ const SUPABASE_KEY = "sb_publishable_MUD1p1806N-BbidyrQsAig_BJLwwQ4U";
     const getSinkingFundPerCycleTotal = () => getSinkingFunds().reduce((sum,fund)=>sum + getFundPerCycleContribution(fund),0);
     function getSpentThisCycle(){ const today=todayISO(), lastPay=state.lastPay||""; return (state.spends||[]).filter(s => s.date && (!lastPay || s.date>=lastPay) && s.date<=today).reduce((sum,s)=>sum + Number(s.amount || 0),0); }
     const getSpentToday = () => (state.spends||[]).filter(s => s.date===todayISO()).reduce((sum,s)=>sum + Number(s.amount || 0),0);
-    function getSafeToSpendNow(){ const carry=Number(state.carryBalance||0), dueBills=getTotalBillsBeforeNextPay(), sinkingFunds=getSinkingFundPerCycleTotal(), savings=Number(state.weeklySavingsTarget||0); return carry - dueBills - sinkingFunds - savings; }
+    function getSafeToSpendNow() {
+  return calculateTrueForecast();
+}{ const carry=Number(state.carryBalance||0), dueBills=getTotalBillsBeforeNextPay(), sinkingFunds=getSinkingFundPerCycleTotal(), savings=Number(state.weeklySavingsTarget||0); return carry - dueBills - sinkingFunds - savings; }
     const getDaysIntoCycle = () => !state.lastPay ? 1 : Math.max(1, daysBetween(state.lastPay, todayISO()) + 1);
     const getAverageDailySpend = () => getSpentThisCycle() / getDaysIntoCycle();
     const getProjectedSpendToPayday = () => (state.nextPay ? daysBetween(todayISO(), state.nextPay) : 0) * getAverageDailySpend();
